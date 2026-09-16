@@ -1,0 +1,92 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: hansacore-ingress
+  namespace: hansacore
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    # Force HTTP -> HTTPS, add HSTS/security headers on every route below.
+    # NOTE: the /admin console is intentionally NOT part of this Ingress —
+    # see 07-ingress-admin.yaml, which layers an extra BasicAuth middleware
+    # on top of these two.
+    traefik.ingress.kubernetes.io/router.middlewares: hansacore-redirect-https@kubernetescrd,hansacore-security-headers@kubernetescrd
+spec:
+  # tls.hosts is overridden per-overlay (see overlays/*/kustomization.yaml
+  # `patches`) — this placeholder is never actually used.
+  tls:
+    - hosts:
+        - "CHANGE-ME.invalid"
+      secretName: hansacore-tls
+  rules:
+    - http:
+        paths:
+          # Keycloak Authentication Endpoints (browser-facing OIDC flows only;
+          # /admin is served by a separate Ingress with extra BasicAuth).
+          - path: /realms
+            pathType: Prefix
+            backend:
+              service:
+                name: keycloak
+                port:
+                  number: 8080
+          - path: /resources
+            pathType: Prefix
+            backend:
+              service:
+                name: keycloak
+                port:
+                  number: 8080
+          - path: /js
+            pathType: Prefix
+            backend:
+              service:
+                name: keycloak
+                port:
+                  number: 8080
+
+          # Gateway BFF Endpoints (Auth Flow & Token Relay)
+          - path: /login
+            pathType: Prefix
+            backend:
+              service:
+                name: portal-gateway
+                port:
+                  number: 8080
+          - path: /oauth2
+            pathType: Prefix
+            backend:
+              service:
+                name: portal-gateway
+                port:
+                  number: 8080
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: portal-gateway
+                port:
+                  number: 8080
+          - path: /be
+            pathType: Prefix
+            backend:
+              service:
+                name: portal-gateway
+                port:
+                  number: 8080
+          - path: /actuator
+            pathType: Prefix
+            backend:
+              service:
+                name: portal-gateway
+                port:
+                  number: 8080
+
+          # Frontend SPA (Fallback Root)
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: hansacore-web
+                port:
+                  number: 80

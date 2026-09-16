@@ -1,0 +1,106 @@
+# Default-deny ingress traffic within the namespace, then explicitly allow
+# only the paths actually needed. Egress is intentionally left unrestricted
+# (Postgres/Keycloak/API all need outbound DNS + Postgres/Keycloak/IdP calls,
+# and hansacore-api needs outbound access to Oracle/IG Bank/etc.) — this is
+# about stopping lateral pod-to-pod movement, not full network isolation.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: hansacore
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+# Traefik (kube-system) -> web, gateway, keycloak
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-from-traefik
+  namespace: hansacore
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values: ["hansacore-web", "portal-gateway", "keycloak"]
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: traefik
+---
+# portal-gateway -> hansacore-api
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-gateway-to-api
+  namespace: hansacore
+spec:
+  podSelector:
+    matchLabels:
+      app: hansacore-api
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: portal-gateway
+      ports:
+        - protocol: TCP
+          port: 8081
+---
+# hansacore-api, portal-gateway, keycloak -> keycloak (OIDC discovery/JWKS/login)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-clients-to-keycloak
+  namespace: hansacore
+spec:
+  podSelector:
+    matchLabels:
+      app: keycloak
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: hansacore-api
+        - podSelector:
+            matchLabels:
+              app: portal-gateway
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# hansacore-api, keycloak -> postgres (only these two workloads may reach the DB)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-app-to-postgres
+  namespace: hansacore
+spec:
+  podSelector:
+    matchLabels:
+      app: postgres
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: hansacore-api
+        - podSelector:
+            matchLabels:
+              app: keycloak
+      ports:
+        - protocol: TCP
+          port: 5432

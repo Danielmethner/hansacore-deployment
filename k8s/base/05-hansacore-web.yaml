@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hansacore-web
+  namespace: hansacore
+  labels:
+    app: hansacore-web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hansacore-web
+  template:
+    metadata:
+      labels:
+        app: hansacore-web
+    spec:
+      containers:
+        - name: hansacore-web
+          image: hansacore-web:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+              name: http
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hansacore-web
+  namespace: hansacore
+spec:
+  selector:
+    app: hansacore-web
+  ports:
+    - port: 80
+      targetPort: 80
+      name: http
+  type: ClusterIP

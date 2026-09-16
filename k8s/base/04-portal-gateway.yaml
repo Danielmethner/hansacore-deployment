@@ -1,0 +1,93 @@
+# NOTE: KEYCLOAK_ISSUER_URI / FRONTEND_URL come from the `hansacore-env`
+# ConfigMap (generated per-overlay); KEYCLOAK_CLIENT_SECRET comes from the
+# `keycloak-clients-secret` Secret (generated per-overlay). This base
+# manifest never hardcodes a specific VM IP/hostname or secret value.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: portal-gateway
+  namespace: hansacore
+  labels:
+    app: portal-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: portal-gateway
+  template:
+    metadata:
+      labels:
+        app: portal-gateway
+    spec:
+      containers:
+        - name: portal-gateway
+          image: portal-gateway:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+          envFrom:
+            - configMapRef:
+                name: hansacore-env
+          env:
+            - name: KEYCLOAK_CLIENT_ID
+              value: "portal-gateway"
+            - name: KEYCLOAK_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-clients-secret
+                  key: PORTAL_GATEWAY_CLIENT_SECRET
+            - name: HANSACORE_API_URL
+              value: "http://hansacore-api.hansacore.svc.cluster.local:8081"
+            - name: TRADING_WEB_URL
+              value: "http://hansacore-web.hansacore.svc.cluster.local:80"
+            # FRONTEND_URL and KEYCLOAK_ISSUER_URI come from hansacore-env
+            # (envFrom above).
+            - name: TRUSTSTORE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: hansacore-ca-trust
+                  key: TRUSTSTORE_PASSWORD
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xms128m -Xmx256m -Djavax.net.ssl.trustStore=/etc/ssl/certs/hansacore/truststore.p12 -Djavax.net.ssl.trustStorePassword=$(TRUSTSTORE_PASSWORD)"
+          volumeMounts:
+            - name: ca-trust-volume
+              mountPath: /etc/ssl/certs/hansacore
+              readOnly: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 15
+      volumes:
+        - name: ca-trust-volume
+          secret:
+            secretName: hansacore-ca-trust
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: portal-gateway
+  namespace: hansacore
+spec:
+  selector:
+    app: portal-gateway
+  ports:
+    - port: 8080
+      targetPort: 8080
+      name: http
+  type: ClusterIP

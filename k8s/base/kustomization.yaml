@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - 00-namespace.yaml
+  - 01-postgres.yaml
+  - 02-keycloak.yaml
+  # 02a-keycloak-realm-cm.yaml is intentionally NOT listed here: it contains
+  # rendered secret values once generated, so it lives only in each overlay
+  # directory as a git-ignored, generated file. See scripts/render-realm.ps1.
+  - 03-hansacore-api.yaml
+  - 04-portal-gateway.yaml
+  - 05-hansacore-web.yaml
+  - 06-ingress.yaml
+  - 07-ingress-admin.yaml
+  - 08-middlewares.yaml
+  - 09-networkpolicies.yaml
+  - 10-ingress-http-redirect.yaml

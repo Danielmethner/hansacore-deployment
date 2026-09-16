@@ -1,0 +1,94 @@
+# NOTE: KEYCLOAK_ISSUER_URI / CORS_ALLOWED_ORIGINS come from the `hansacore-env`
+# ConfigMap (generated per-overlay) so this base manifest never hardcodes a
+# specific VM IP/hostname. Same manifest works unchanged for local-vm and gcp.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hansacore-api
+  namespace: hansacore
+  labels:
+    app: hansacore-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hansacore-api
+  template:
+    metadata:
+      labels:
+        app: hansacore-api
+    spec:
+      containers:
+        - name: hansacore-api
+          image: hansacore-api:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8081
+              name: http
+          envFrom:
+            - configMapRef:
+                name: hansacore-env
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: "dev"
+            - name: PORT
+              value: "8081"
+            - name: SPRING_DATASOURCE_URL
+              value: "jdbc:postgresql://postgres.hansacore.svc.cluster.local:5432/tradingintf?currentSchema=tradingintf"
+            - name: SPRING_DATASOURCE_USERNAME
+              value: "merchant"
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: MERCHANT_PASSWORD
+            # KEYCLOAK_ISSUER_URI and CORS_ALLOWED_ORIGINS come from
+            # hansacore-env (envFrom above).
+            - name: TRUSTSTORE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: hansacore-ca-trust
+                  key: TRUSTSTORE_PASSWORD
+            - name: JAVA_TOOL_OPTIONS
+              value: "-XX:MaxRAMPercentage=75.0 -XX:+UseZGC -Djavax.net.ssl.trustStore=/etc/ssl/certs/hansacore/truststore.p12 -Djavax.net.ssl.trustStorePassword=$(TRUSTSTORE_PASSWORD)"
+          volumeMounts:
+            - name: ca-trust-volume
+              mountPath: /etc/ssl/certs/hansacore
+              readOnly: true
+          resources:
+            requests:
+              cpu: 250m
+              memory: 768Mi
+            limits:
+              cpu: 1000m
+              memory: 1536Mi
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8081
+            initialDelaySeconds: 25
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8081
+            initialDelaySeconds: 45
+            periodSeconds: 15
+      volumes:
+        - name: ca-trust-volume
+          secret:
+            secretName: hansacore-ca-trust
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hansacore-api
+  namespace: hansacore
+spec:
+  selector:
+    app: hansacore-api
+  ports:
+    - port: 8081
+      targetPort: 8081
+      name: http
+  type: ClusterIP

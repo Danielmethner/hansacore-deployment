@@ -1,0 +1,38 @@
+# Private Keys & Sensitive Certificates
+*.key
+*.csr
+*.p12
+*.jks
+*.srl
+*.pem
+
+# Generated TLS Artifacts (Dynamic per VM/host IP)
+ssl/server.crt
+ssl/tls.crt
+ssl/ca.key
+ssl/ca.crt
+ssl/truststore.p12
+ssl/truststore-password.txt
+ssl/verify.sh
+
+# Real secret values for each overlay (bootstrapped via
+# scripts/bootstrap-secrets.sh). Only the *.example templates are tracked.
+k8s/overlays/*/secrets/*.env
+k8s/overlays/*/secrets/*.htpasswd
+
+# Rendered Keycloak realm ConfigMap — contains resolved secret values once
+# generated (scripts/render-realm.sh). Never commit this.
+k8s/overlays/*/02a-keycloak-realm-cm.generated.yaml
+
+# IDE & OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.bak
+
+# Temporary / Scratch
+scratch/
+*.tmp
+*.log

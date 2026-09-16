@@ -1,0 +1,118 @@
+# NOTE: KEYCLOAK_ADMIN_PASSWORD comes from the `keycloak-admin-secret` Secret,
+# generated per-overlay (see k8s/overlays/<env>/secrets/keycloak-admin.env.example).
+# Hostname/proxy values come from the `hansacore-env` ConfigMap, generated
+# per-overlay so the same base manifest works unchanged for local-vm and gcp.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+  namespace: hansacore
+  labels:
+    app: keycloak
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: keycloak
+  template:
+    metadata:
+      labels:
+        app: keycloak
+    spec:
+      containers:
+        - name: keycloak
+          image: quay.io/keycloak/keycloak:24.0
+          imagePullPolicy: IfNotPresent
+          # `start` (not `start-dev`): start-dev is explicitly unsupported
+          # beyond throwaway local testing (relaxed caching, no production
+          # hardening). `--import-realm` works with `start` too.
+          command:
+            - "/opt/keycloak/bin/kc.sh"
+            - "start"
+            - "--import-realm"
+          # NOTE: not using `--optimized` since this runs the stock
+          # quay.io/keycloak/keycloak image (no `kc.sh build` baked in at
+          # image-build time). Add `--optimized` only if you switch to a
+          # custom image that runs `kc.sh build` in its Dockerfile.
+          envFrom:
+            - configMapRef:
+                name: hansacore-env
+          env:
+            - name: KC_DB
+              value: "postgres"
+            - name: KC_DB_URL
+              value: "jdbc:postgresql://postgres.hansacore.svc.cluster.local:5432/keycloak"
+            - name: KC_DB_USERNAME
+              value: "keycloak"
+            - name: KC_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: KEYCLOAK_PASSWORD
+            - name: KEYCLOAK_ADMIN
+              value: "admin"
+            - name: KEYCLOAK_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-admin-secret
+                  key: KEYCLOAK_ADMIN_PASSWORD
+            # KC_HOSTNAME / KC_PROXY_HEADERS come from the hansacore-env
+            # ConfigMap (envFrom above) so they follow the overlay's real
+            # hostname instead of being hardcoded here.
+            - name: KC_HOSTNAME_STRICT
+              value: "true"
+            - name: KC_HTTP_ENABLED
+              value: "true"
+            - name: KC_HEALTH_ENABLED
+              value: "true"
+            - name: KC_METRICS_ENABLED
+              value: "false"
+          ports:
+            - containerPort: 8080
+              name: http
+          volumeMounts:
+            - name: realm-volume
+              mountPath: /opt/keycloak/data/import/portal-realm.json
+              subPath: portal-realm.json
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 1024Mi
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 15
+      volumes:
+        - name: realm-volume
+          configMap:
+            name: keycloak-realm
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak
+  namespace: hansacore
+spec:
+  selector:
+    app: keycloak
+  ports:
+    - port: 8080
+      targetPort: 8080
+      name: http
+    - port: 9000
+      targetPort: 9000
+      name: management
+  type: ClusterIP

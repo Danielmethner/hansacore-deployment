@@ -1,0 +1,164 @@
+# NOTE: Secrets (postgres-secret) are intentionally NOT defined here.
+# They are generated per-overlay via `secretGenerator` from a local,
+# git-ignored env file. See k8s/overlays/<env>/kustomization.yaml and
+# k8s/overlays/<env>/secrets/postgres.env (copy from postgres.env.example).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init-sql
+  namespace: hansacore
+data:
+  # Runs as a shell script (not raw .sql) so it can read the DB passwords
+  # from container environment variables instead of having them baked into
+  # this ConfigMap in plaintext. Values come from the postgres-secret Secret
+  # (see below) via `envFrom` on the postgres Deployment.
+  init.sh: |
+    #!/bin/bash
+    set -euo pipefail
+
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
+      -- Keycloak database and user
+      DO \$\$
+      BEGIN
+        IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'keycloak') THEN
+          CREATE USER keycloak WITH PASSWORD '${KEYCLOAK_DB_PASSWORD}';
+        END IF;
+      END
+      \$\$;
+
+      SELECT 'CREATE DATABASE keycloak OWNER keycloak'
+      WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'keycloak')\gexec
+
+      GRANT ALL PRIVILEGES ON DATABASE keycloak TO keycloak;
+
+      -- Hansacore API database and user
+      DO \$\$
+      BEGIN
+        IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'merchant') THEN
+          CREATE USER merchant WITH PASSWORD '${MERCHANT_DB_PASSWORD}';
+        END IF;
+      END
+      \$\$;
+
+      SELECT 'CREATE DATABASE tradingintf OWNER merchant'
+      WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'tradingintf')\gexec
+
+      GRANT ALL PRIVILEGES ON DATABASE tradingintf TO merchant;
+    EOSQL
+
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname tradingintf <<-EOSQL
+      CREATE SCHEMA IF NOT EXISTS tradingintf AUTHORIZATION merchant;
+      GRANT ALL ON SCHEMA tradingintf TO merchant;
+    EOSQL
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+  namespace: hansacore
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: hansacore
+  labels:
+    app: postgres
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5432
+              name: postgres
+          env:
+            - name: POSTGRES_USER
+              value: "postgres"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_PASSWORD
+            - name: PGDATA
+              value: "/var/lib/postgresql/data/pgdata"
+            # Consumed by init.sh at first-boot only (data dir empty).
+            - name: KEYCLOAK_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: KEYCLOAK_PASSWORD
+            - name: MERCHANT_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: MERCHANT_PASSWORD
+          volumeMounts:
+            - name: postgres-storage
+              mountPath: /var/lib/postgresql/data
+            - name: init-script
+              mountPath: /docker-entrypoint-initdb.d/init.sh
+              subPath: init.sh
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            exec:
+              command:
+                - "/bin/sh"
+                - "-c"
+                - "pg_isready -U postgres"
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command:
+                - "/bin/sh"
+                - "-c"
+                - "pg_isready -U postgres"
+            initialDelaySeconds: 15
+            periodSeconds: 10
+      volumes:
+        - name: postgres-storage
+          persistentVolumeClaim:
+            claimName: postgres-pvc
+        - name: init-script
+          configMap:
+            name: postgres-init-sql
+            defaultMode: 0755
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: hansacore
+spec:
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+      name: postgres
+  type: ClusterIP

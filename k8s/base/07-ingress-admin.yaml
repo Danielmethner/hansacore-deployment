@@ -1,0 +1,28 @@
+# Keycloak admin console + account console: split into its own Ingress so we
+# can layer an extra BasicAuth middleware on top, without weakening the main
+# site's routing. Defense-in-depth on top of Keycloak's own admin login —
+# this does NOT replace rotating the Keycloak admin password.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: hansacore-ingress-admin
+  namespace: hansacore
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    traefik.ingress.kubernetes.io/router.middlewares: hansacore-redirect-https@kubernetescrd,hansacore-security-headers@kubernetescrd,hansacore-admin-basic-auth@kubernetescrd
+spec:
+  tls:
+    - hosts:
+        - "CHANGE-ME.invalid" # overridden per-overlay
+      secretName: hansacore-tls
+  rules:
+    - http:
+        paths:
+          - path: /admin
+            pathType: Prefix
+            backend:
+              service:
+                name: keycloak
+                port:
+                  number: 8080
