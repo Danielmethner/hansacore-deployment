@@ -34,16 +34,25 @@ spec:
             - name: PORT
               value: "8081"
             - name: SPRING_DATASOURCE_URL
-              value: "jdbc:postgresql://postgres.hansacore.svc.cluster.local:5432/tradingintf?currentSchema=tradingintf"
+              value: "jdbc:postgresql://postgres.hansacore.svc.cluster.local:5432/hansacore?currentSchema=hansacore"
             - name: SPRING_DATASOURCE_USERNAME
-              value: "merchant"
+              value: "hansacore_api"
             - name: SPRING_DATASOURCE_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: postgres-secret
-                  key: MERCHANT_PASSWORD
-            # KEYCLOAK_ISSUER_URI and CORS_ALLOWED_ORIGINS come from
-            # hansacore-env (envFrom above).
+                  key: HANSACORE_API_PASSWORD
+            # CORS_ALLOWED_ORIGINS comes from hansacore-env (envFrom above) and
+            # binds to `cors.allowed.origins` by relaxed binding. KEYCLOAK_ISSUER_URI
+            # does not: application.properties only reads it via a `${...}`
+            # placeholder, and the active `dev` profile replaces that whole line
+            # with a localhost literal. Binding the canonical Spring property name
+            # here wins outright, since OS env outranks every application*.properties.
+            - name: SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI
+              valueFrom:
+                configMapKeyRef:
+                  name: hansacore-env
+                  key: KEYCLOAK_ISSUER_URI
             - name: TRUSTSTORE_PASSWORD
               valueFrom:
                 secretKeyRef:

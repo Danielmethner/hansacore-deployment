@@ -39,7 +39,15 @@ write_if_missing "$SECRETS_DIR/keycloak-admin.env" \
 
 write_if_missing "$SECRETS_DIR/keycloak-clients.env" \
   "PORTAL_GATEWAY_CLIENT_SECRET=$(randpw)" \
-  "HANSACORE_API_CLIENT_SECRET=$(randpw)"
+  "HANSACORE_API_CLIENT_SECRET=$(randpw)" \
+  "MICROSOFT_CLIENT_SECRET=PASTE_REAL_VALUE_FROM_ENTRA_PORTAL"
+
+# Migration for setups bootstrapped before the Microsoft IdP secret was
+# managed here: the file exists but has no such key yet.
+if [ -f "$SECRETS_DIR/keycloak-clients.env" ] && ! grep -q '^MICROSOFT_CLIENT_SECRET=' "$SECRETS_DIR/keycloak-clients.env"; then
+  echo "MICROSOFT_CLIENT_SECRET=PASTE_REAL_VALUE_FROM_ENTRA_PORTAL" >> "$SECRETS_DIR/keycloak-clients.env"
+  echo "Added MICROSOFT_CLIENT_SECRET placeholder to $SECRETS_DIR/keycloak-clients.env"
+fi
 
 write_if_missing "$SECRETS_DIR/seed-users.env" \
   "SEED_USER_PASSWORD=$(randpw)"
@@ -60,3 +68,10 @@ echo ""
 echo "Done. Review the generated files under $SECRETS_DIR, then run:"
 echo "  scripts/render-realm.sh $OVERLAY"
 echo "  kubectl apply -k k8s/overlays/$OVERLAY"
+
+if grep -q '^MICROSOFT_CLIENT_SECRET=PASTE_REAL_VALUE_FROM_ENTRA_PORTAL' "$SECRETS_DIR/keycloak-clients.env" 2>/dev/null; then
+  echo ""
+  echo "ACTION NEEDED: paste the real Entra client secret *value* into"
+  echo "  $SECRETS_DIR/keycloak-clients.env  (MICROSOFT_CLIENT_SECRET=...)"
+  echo "A placeholder there fails Microsoft login with AADSTS7000215."
+fi

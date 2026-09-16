@@ -10,6 +10,9 @@ resources:
   - 02a-keycloak-realm-cm.generated.yaml
 
 configMapGenerator:
+  - name: hansacore-demo-data
+    files:
+      - demo-data.yml
   - name: hansacore-env
     envs:
       - hansacore-env.properties
@@ -54,3 +57,25 @@ patches:
       - op: replace
         path: /spec/tls/0/hosts/0
         value: k3s-lab.mshome.net
+
+  - target:
+      kind: Deployment
+      name: hansacore-api
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/volumeMounts/-
+        value:
+          name: demo-data-volume
+          mountPath: /app/config/demo-data.yml
+          subPath: demo-data.yml
+      - op: add
+        path: /spec/template/spec/volumes/-
+        value:
+          name: demo-data-volume
+          configMap:
+            name: hansacore-demo-data
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: SPRING_CONFIG_IMPORT
+          value: "optional:file:/app/config/demo-data.yml"

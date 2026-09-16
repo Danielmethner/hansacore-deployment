@@ -28,7 +28,16 @@ get_val() { grep -m1 "^$1=" "$2" | cut -d= -f2-; }
 PUBLIC_HOSTNAME="$(get_val PUBLIC_HOSTNAME "$OVERLAY_DIR/hansacore-env.properties")"
 PORTAL_GATEWAY_CLIENT_SECRET="$(get_val PORTAL_GATEWAY_CLIENT_SECRET "$SECRETS_DIR/keycloak-clients.env")"
 HANSACORE_API_CLIENT_SECRET="$(get_val HANSACORE_API_CLIENT_SECRET "$SECRETS_DIR/keycloak-clients.env")"
+MICROSOFT_CLIENT_SECRET="$(get_val MICROSOFT_CLIENT_SECRET "$SECRETS_DIR/keycloak-clients.env")"
 SEED_USER_PASSWORD="$(get_val SEED_USER_PASSWORD "$SECRETS_DIR/seed-users.env")"
+
+if [ -z "$MICROSOFT_CLIENT_SECRET" ]; then
+  echo "Missing MICROSOFT_CLIENT_SECRET in $SECRETS_DIR/keycloak-clients.env — paste the Entra client secret *value* there first (see README section 4)." >&2
+  exit 1
+fi
+# Escape sed-replacement metacharacters (&, backslash, and the # delimiter)
+# so any Entra-generated secret value renders verbatim.
+MICROSOFT_CLIENT_SECRET_ESC="$(printf '%s' "$MICROSOFT_CLIENT_SECRET" | sed -e 's/[\\&#]/\\&/g')"
 BASE_URL="https://${PUBLIC_HOSTNAME}"
 
 # Use a temp file inside the repo tree (not /tmp) so it resolves correctly
@@ -41,6 +50,7 @@ sed \
   -e "s#__BASE_URL__#${BASE_URL}#g" \
   -e "s#__PORTAL_GATEWAY_CLIENT_SECRET__#${PORTAL_GATEWAY_CLIENT_SECRET}#g" \
   -e "s#__HANSACORE_API_CLIENT_SECRET__#${HANSACORE_API_CLIENT_SECRET}#g" \
+  -e "s#__MICROSOFT_CLIENT_SECRET__#${MICROSOFT_CLIENT_SECRET_ESC}#g" \
   -e "s#__SEED_USER_PASSWORD__#${SEED_USER_PASSWORD}#g" \
   "$DIR/identity/portal-realm.template.json" > "$TMP_JSON"
 

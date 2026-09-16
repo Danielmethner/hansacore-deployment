@@ -34,21 +34,21 @@ data:
       -- Hansacore API database and user
       DO \$\$
       BEGIN
-        IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'merchant') THEN
-          CREATE USER merchant WITH PASSWORD '${MERCHANT_DB_PASSWORD}';
+        IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'hansacore_api') THEN
+          CREATE USER hansacore_api WITH PASSWORD '${HANSACORE_API_DB_PASSWORD}';
         END IF;
       END
       \$\$;
 
-      SELECT 'CREATE DATABASE tradingintf OWNER merchant'
-      WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'tradingintf')\gexec
+      SELECT 'CREATE DATABASE hansacore OWNER hansacore_api'
+      WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'hansacore')\gexec
 
-      GRANT ALL PRIVILEGES ON DATABASE tradingintf TO merchant;
+      GRANT ALL PRIVILEGES ON DATABASE hansacore TO hansacore_api;
     EOSQL
 
-    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname tradingintf <<-EOSQL
-      CREATE SCHEMA IF NOT EXISTS tradingintf AUTHORIZATION merchant;
-      GRANT ALL ON SCHEMA tradingintf TO merchant;
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname hansacore <<-EOSQL
+      CREATE SCHEMA IF NOT EXISTS hansacore AUTHORIZATION hansacore_api;
+      GRANT ALL ON SCHEMA hansacore TO hansacore_api;
     EOSQL
 ---
 apiVersion: v1
@@ -106,11 +106,11 @@ spec:
                 secretKeyRef:
                   name: postgres-secret
                   key: KEYCLOAK_PASSWORD
-            - name: MERCHANT_DB_PASSWORD
+            - name: HANSACORE_API_DB_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: postgres-secret
-                  key: MERCHANT_PASSWORD
+                  key: HANSACORE_API_PASSWORD
           volumeMounts:
             - name: postgres-storage
               mountPath: /var/lib/postgresql/data

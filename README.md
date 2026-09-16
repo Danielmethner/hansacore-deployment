@@ -193,6 +193,17 @@ Azure AD strictly enforces that all non-localhost redirect URIs must begin with 
    ```
    *(Prefer `https://k3s-lab.mshome.net/realms/portal/broker/microsoft/endpoint`, since it's stable across VM restarts.)*
 
+### Entra Client Secret
+Under **Certificates & secrets** → **New client secret**, create a secret and copy its
+**Value** (not the Secret ID) into the overlay's git-ignored secrets file:
+```text
+k8s/overlays/<env>/secrets/keycloak-clients.env  →  MICROSOFT_CLIENT_SECRET=<value>
+```
+Then re-render (`scripts/render-realm.sh <env>`). Note: realm import runs once on an
+empty database, so re-rendering only covers fresh installs — for a running cluster,
+also update the live `microsoft` identity provider via the Keycloak Admin API (or
+reset the keycloak database per §6 to force a re-import).
+
 ### Local Windows Trust (Green Padlock)
 To trust the local Certificate Authority on your Windows host:
 ```powershell
