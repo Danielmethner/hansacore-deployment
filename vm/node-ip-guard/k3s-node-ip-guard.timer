@@ -1,0 +1,10 @@
+[Unit]
+Description=Periodically verify k3s node IP matches VM IP
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+Unit=k3s-node-ip-guard.service
+
+[Install]
+WantedBy=timers.target

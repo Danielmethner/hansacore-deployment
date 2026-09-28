@@ -39,7 +39,7 @@ spec:
                   key: PORTAL_GATEWAY_CLIENT_SECRET
             - name: HANSACORE_API_URL
               value: "http://hansacore-api.hansacore.svc.cluster.local:8081"
-            - name: TRADING_WEB_URL
+            - name: HANSACORE_WEB_URL
               value: "http://hansacore-web.hansacore.svc.cluster.local:80"
             # FRONTEND_URL and KEYCLOAK_ISSUER_URI come from hansacore-env
             # (envFrom above).

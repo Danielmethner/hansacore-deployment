@@ -32,7 +32,7 @@ write_if_missing() {
 write_if_missing "$SECRETS_DIR/postgres.env" \
   "POSTGRES_PASSWORD=$(randpw)" \
   "KEYCLOAK_PASSWORD=$(randpw)" \
-  "MERCHANT_PASSWORD=$(randpw)"
+  "HANSACORE_API_PASSWORD=$(randpw)"
 
 write_if_missing "$SECRETS_DIR/keycloak-admin.env" \
   "KEYCLOAK_ADMIN_PASSWORD=$(randpw)"

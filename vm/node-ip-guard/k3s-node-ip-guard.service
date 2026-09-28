@@ -1,0 +1,11 @@
+[Unit]
+Description=Verify k3s node IP matches VM IP (heal after DHCP renumbering)
+After=network-online.target k3s.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/k3s-node-ip-guard.sh
+
+[Install]
+WantedBy=multi-user.target

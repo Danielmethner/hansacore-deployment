@@ -20,8 +20,9 @@ This deployment setup is designed for:
                                └──────────────────┬──────────────────┘
                                                   │
          ┌───────────────────┬────────────────────┼───────────────────┐
-         │ /                 │ /login, /oauth2,   │ /realms, /js,     │ /admin (separate
-         │                   │ /api, /be          │ /resources        │ Ingress + BasicAuth)
+         │ /                 │ /oauth2, /logout,  │ /realms, /js,     │ /admin (separate
+         │                   │ /login/oauth2,     │ /resources        │ Ingress + BasicAuth)
+         │                   │ /api, /be          │                   │
          ▼                   ▼                    ▼                   ▼
  ┌──────────────┐    ┌────────────────┐   ┌───────────────┐   ┌───────────────┐
  │hansacore-web │    │ portal-gateway │   │   keycloak    │   │   keycloak    │
@@ -49,7 +50,7 @@ This deployment setup is designed for:
 
 | Service | Technology | Port | Purpose |
 | :--- | :--- | :--- | :--- |
-| **`postgres`** | PostgreSQL 16 Alpine | `5432` | Dual database instance (`tradingintf` and `keycloak`) with persistent storage |
+| **`postgres`** | PostgreSQL 16 Alpine | `5432` | Dual database instance (`hansacore` and `keycloak`) with persistent storage |
 | **`keycloak`** | Keycloak 24.0 (`start`, not `start-dev`) | `8080` | Identity and Access Management with Microsoft Entra ID OIDC identity broker |
 | **`hansacore-api`** | Spring Boot 3.4 / Java 21 | `8081` | Core trading and backoffice REST API resource server |
 | **`portal-gateway`** | Spring Cloud Gateway / BFF | `8080` | Secure session gateway, OAuth2 token relay, and reverse proxy |
@@ -146,19 +147,25 @@ from the same base manifests.
    - Exports the Root CA into a Java PKCS12 truststore (`truststore.p12`), protected by a randomly generated password (not the well-known "changeit" default).
    - Creates the `hansacore-tls` and `hansacore-ca-trust` Kubernetes secrets in namespace `hansacore`.
 
-4. **Apply everything** via Kustomize:
+4. **Build the images and import them into k3s** (inside the VM, from the
+   repo mount; re-run for a component whenever its code changes):
+   ```bash
+   bash /home/ubuntu/hansacore/hansacore-deployment/scripts/build-images.sh [api|gateway|web ...]
+   ```
+
+5. **Apply everything** via Kustomize:
    ```bash
    kubectl apply -k k8s/overlays/local-vm
    ```
    This replaces the old "apply each file in order" workflow — Kustomize
    handles namespace, generated ConfigMaps/Secrets, and ordering.
 
-5. **Verify all pods are running:**
+6. **Verify all pods are running:**
    ```bash
    kubectl get pods -n hansacore
    ```
 
-6. **Browse to `https://k3s-lab.mshome.net`** (prefer the stable hostname
+7. **Browse to `https://k3s-lab.mshome.net`** (prefer the stable hostname
    over the raw VM IP — the IP is DHCP-assigned and can change on VM
    restart, the hostname doesn't). Log in with one of the seeded users
    (`consultant`, `daniel.methner@forty2.ch`, `milad.g@forty2.ch`,
@@ -248,10 +255,48 @@ kubectl apply -k k8s/overlays/local-vm
 kubectl rollout restart deploy/keycloak -n hansacore
 ```
 
+### VM IP Changes (Host Sleep / Reboot / Network Switch)
+
+The Multipass VM gets its IP via DHCP from Hyper-V's Default Switch, which
+Windows recreates whenever the host sleeps, reboots, or changes networks —
+the VM IP *will* change regularly (several times observed within two days).
+k3s pins the node IP at startup, so after a renumber the cluster keeps
+serving the stale address: pod DNS/egress breaks or crawls, and
+server-to-server calls (notably Keycloak → Microsoft during SSO) time out
+with generic error pages. Everything else (Azure redirect URI, TLS cert,
+ingress) uses the `k3s-lab.mshome.net` hostname, which follows the VM, so
+only k3s itself needs re-converging.
+
+Fast diagnosis — these two must agree:
+```bash
+multipass info k3s-lab          # real VM IP
+kubectl get nodes -o wide       # INTERNAL-IP as k3s sees it
+```
+
+Recovery is one command (also re-establishes the repo file mount if it died):
+```bash
+multipass restart k3s-lab
+```
+
+Without a VM restart, recover in place — both steps are needed, because the
+CoreDNS pod keeps forwarding to the old Hyper-V DNS server it copied at start:
+```bash
+sudo systemctl restart k3s
+kubectl rollout restart deploy/coredns -n kube-system
+```
+
+A `k3s-node-ip-guard` systemd timer installed in the VM (see
+`vm/node-ip-guard/`, LOCAL DEV CLUSTER ONLY — staging/production use static
+IPs where renumbering cannot happen) performs this check automatically and,
+on confirmed persistent drift, restarts k3s and then CoreDNS. Install it with
+`sudo bash /home/ubuntu/hansacore/hansacore-deployment/vm/node-ip-guard/install.sh`. Inspect with
+`journalctl -u k3s-node-ip-guard.service` and dry-run with
+`sudo /usr/local/bin/k3s-node-ip-guard.sh --dry-run`.
+
 ### Checking Health & Logs
 ```bash
-# Gateway health
-curl -k -I https://k3s-lab.mshome.net/actuator/health
+# Gateway health (actuator is not exposed on the public ingress)
+kubectl exec -n hansacore deploy/portal-gateway -- wget -qO- http://localhost:8080/actuator/health
 
 # Keycloak OIDC Discovery
 curl -k https://k3s-lab.mshome.net/realms/portal/.well-known/openid-configuration

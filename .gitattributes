@@ -1,3 +1,7 @@
-# Shell scripts must always check out with LF, even on Windows — CRLF line
-# endings break `#!/bin/bash` scripts (bash chokes on `set -euo pipefail\r`).
-*.sh text eol=lf
+# Line-ending policy: LF everywhere. Reason: render-realm.sh substitutes values
+# from *.properties / secrets/*.env into the realm JSON with sed; a CR inside
+# a substituted value lands INSIDE a JSON string, which breaks realm parsing
+# (Jackson) and crash-loops Keycloak on import. CRLF line endings are harmless
+# in YAML/Markdown/shell, but keeping everything LF means no tool in the chain
+# ever has to care.
+* text=auto eol=lf

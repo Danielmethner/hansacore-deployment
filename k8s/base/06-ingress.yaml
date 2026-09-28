@@ -45,8 +45,19 @@ spec:
                 port:
                   number: 8080
 
-          # Gateway BFF Endpoints (Auth Flow & Token Relay)
-          - path: /login
+          # Gateway BFF Endpoints (Auth Flow & Token Relay).
+          # Only the OAuth2 callback under /login belongs to the gateway —
+          # /login itself is an SPA route and must fall through to hansacore-web.
+          - path: /login/oauth2
+            pathType: Prefix
+            backend:
+              service:
+                name: portal-gateway
+                port:
+                  number: 8080
+          # Prefix, not Exact: Traefik ranks routers by rule length, and
+          # Path(`/logout`) ties with the SPA's PathPrefix(`/`) and loses.
+          - path: /logout
             pathType: Prefix
             backend:
               service:
@@ -68,13 +79,6 @@ spec:
                 port:
                   number: 8080
           - path: /be
-            pathType: Prefix
-            backend:
-              service:
-                name: portal-gateway
-                port:
-                  number: 8080
-          - path: /actuator
             pathType: Prefix
             backend:
               service:
