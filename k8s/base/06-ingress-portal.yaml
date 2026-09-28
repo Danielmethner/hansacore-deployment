@@ -1,0 +1,68 @@
+# Portal host (<env>.hansacore.com, prod: hansacore.com): the portal front
+# end plus the same gateway BFF endpoints as the ERP host. The gateway keeps a
+# separate, host-only session per host; single sign-on between the hosts comes
+# from Keycloak's own session. Future portal sub-apps are added here as
+# subpaths so they share the portal's session cookie.
+# host / tls.hosts are overridden per overlay.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: hansacore-ingress-portal
+  namespace: hansacore
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    traefik.ingress.kubernetes.io/router.middlewares: hansacore-redirect-https@kubernetescrd,hansacore-security-headers@kubernetescrd
+spec:
+  tls:
+    - hosts:
+        - "CHANGE-ME.invalid"
+      secretName: hansacore-tls
+  rules:
+    - host: "CHANGE-ME.invalid"
+      http:
+        paths:
+          - path: /login/oauth2
+            pathType: Prefix
+            backend:
+              service:
+                name: portal-gateway
+                port:
+                  number: 8080
+          # Prefix, not Exact — see 06-ingress-erp.yaml.
+          - path: /logout
+            pathType: Prefix
+            backend:
+              service:
+                name: portal-gateway
+                port:
+                  number: 8080
+          - path: /oauth2
+            pathType: Prefix
+            backend:
+              service:
+                name: portal-gateway
+                port:
+                  number: 8080
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: portal-gateway
+                port:
+                  number: 8080
+          - path: /be
+            pathType: Prefix
+            backend:
+              service:
+                name: portal-gateway
+                port:
+                  number: 8080
+
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: portal-placeholder
+                port:
+                  number: 80

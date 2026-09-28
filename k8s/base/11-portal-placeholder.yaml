@@ -1,0 +1,142 @@
+# Stand-in for the portal front end on the portal host until the real portal
+# shell exists. It only shows the gateway session state, which makes the
+# cross-host single sign-on (ERP host <-> portal host via Keycloak) testable.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: portal-placeholder-html
+  namespace: hansacore
+data:
+  # Every path serves the page: the gateway redirects to /login?error and
+  # /login?logout, which must not 404 here.
+  default.conf: |
+    server {
+      listen 80;
+      root /usr/share/nginx/html;
+      location / {
+        try_files $uri /index.html;
+      }
+    }
+  index.html: |
+    <!doctype html>
+    <html lang="en">
+    <head>
+      <meta charset="utf-8">
+      <title>HansaCore Portal</title>
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <style>
+        body { font-family: system-ui, sans-serif; margin: 0; min-height: 100vh;
+               display: flex; align-items: center; justify-content: center; background: #f4f5f7; }
+        main { background: #fff; padding: 2rem 2.5rem; border-radius: 8px;
+               box-shadow: 0 1px 4px rgba(0,0,0,.12); text-align: center; min-width: 20rem; }
+        button, a.button { font: inherit; padding: .5rem 1.25rem; border: 0; border-radius: 4px;
+               background: #1f5fa8; color: #fff; cursor: pointer; text-decoration: none; }
+      </style>
+    </head>
+    <body>
+      <main>
+        <h1>HansaCore Portal</h1>
+        <p id="status">Checking session&hellip;</p>
+        <div id="actions"></div>
+      </main>
+      <script>
+        const status = document.getElementById('status');
+        const actions = document.getElementById('actions');
+        const params = new URLSearchParams(location.search);
+        // Silent SSO check: without a session here, ask Keycloak once with prompt=none whether the
+        // user is already logged in on another app host. The gateway answers /?sso=none if not.
+        // The timestamp guard stops a redirect loop if a session exists but the profile call fails.
+        const SSO_CHECK_KEY = 'hansacore.ssoCheckAt';
+        function trySilentLogin() {
+          if (params.has('sso') || params.has('error') || params.has('logout')) {
+            return false;
+          }
+          const last = Number(sessionStorage.getItem(SSO_CHECK_KEY) || 0);
+          if (Date.now() - last < 60000) {
+            return false;
+          }
+          sessionStorage.setItem(SSO_CHECK_KEY, String(Date.now()));
+          location.replace('/oauth2/authorization/keycloak?prompt=none');
+          return true;
+        }
+        fetch('/be/auth/profile', { credentials: 'same-origin' })
+          .then((res) => (res.ok ? res.json() : Promise.reject(res.status)))
+          .then((user) => {
+            status.textContent = 'Signed in as ' + (user.name || user.username || user.email || 'unknown user');
+            actions.innerHTML = '<form method="post" action="/logout"><button type="submit">Sign out</button></form>';
+          })
+          .catch((httpStatus) => {
+            if (httpStatus === 401 && trySilentLogin()) {
+              return;
+            }
+            status.textContent = params.has('error') ? 'Sign-in did not complete. Please try again.' : 'Not signed in.';
+            actions.innerHTML = '<a class="button" href="/oauth2/authorization/keycloak">Sign in</a>';
+          });
+      </script>
+    </body>
+    </html>
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: portal-placeholder
+  namespace: hansacore
+  labels:
+    app: portal-placeholder
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: portal-placeholder
+  template:
+    metadata:
+      labels:
+        app: portal-placeholder
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+              name: http
+          volumeMounts:
+            - name: html
+              mountPath: /usr/share/nginx/html/index.html
+              subPath: index.html
+              readOnly: true
+            - name: html
+              mountPath: /etc/nginx/conf.d/default.conf
+              subPath: default.conf
+              readOnly: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 2
+            periodSeconds: 10
+      volumes:
+        - name: html
+          configMap:
+            name: portal-placeholder-html
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: portal-placeholder
+  namespace: hansacore
+spec:
+  selector:
+    app: portal-placeholder
+  ports:
+    - port: 80
+      targetPort: 80
+      name: http
+  type: ClusterIP

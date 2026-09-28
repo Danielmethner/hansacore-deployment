@@ -12,12 +12,14 @@ metadata:
     traefik.ingress.kubernetes.io/router.tls: "true"
     traefik.ingress.kubernetes.io/router.middlewares: hansacore-redirect-https@kubernetescrd,hansacore-security-headers@kubernetescrd,hansacore-admin-basic-auth@kubernetescrd
 spec:
+  # Auth host; host / tls.hosts are overridden per overlay.
   tls:
     - hosts:
-        - "CHANGE-ME.invalid" # overridden per-overlay
+        - "CHANGE-ME.invalid"
       secretName: hansacore-tls
   rules:
-    - http:
+    - host: "CHANGE-ME.invalid"
+      http:
         paths:
           - path: /admin
             pathType: Prefix

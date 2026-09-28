@@ -1,0 +1,43 @@
+# Auth host (<env>.auth.hansacore.com): Keycloak's browser-facing OIDC
+# endpoints, shared by every app host. /admin lives on the same host but in
+# 07-ingress-admin.yaml, which adds an extra BasicAuth middleware.
+# host / tls.hosts are overridden per overlay.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: hansacore-ingress-auth
+  namespace: hansacore
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    traefik.ingress.kubernetes.io/router.middlewares: hansacore-redirect-https@kubernetescrd,hansacore-security-headers@kubernetescrd
+spec:
+  tls:
+    - hosts:
+        - "CHANGE-ME.invalid"
+      secretName: hansacore-tls
+  rules:
+    - host: "CHANGE-ME.invalid"
+      http:
+        paths:
+          - path: /realms
+            pathType: Prefix
+            backend:
+              service:
+                name: keycloak
+                port:
+                  number: 8080
+          - path: /resources
+            pathType: Prefix
+            backend:
+              service:
+                name: keycloak
+                port:
+                  number: 8080
+          - path: /js
+            pathType: Prefix
+            backend:
+              service:
+                name: keycloak
+                port:
+                  number: 8080

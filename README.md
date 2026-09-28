@@ -10,6 +10,23 @@ This deployment setup is designed for:
 
 ## 1. System Architecture
 
+### Hostnames
+
+Pattern: `<env>.<app>.hansacore.com`; production has no environment label.
+
+| Environment | Portal | ERP (`hansacore-web`) | Keycloak |
+| :--- | :--- | :--- | :--- |
+| PROD | `hansacore.com` | `erp.hansacore.com` | `auth.hansacore.com` |
+| UAT | `uat.hansacore.com` | `uat.erp.hansacore.com` | `uat.auth.hansacore.com` |
+| SIT (GCP, `overlays/gcp`) | `sit.hansacore.com` | `sit.erp.hansacore.com` | `sit.auth.hansacore.com` |
+| DEV (Multipass, `overlays/local-vm`) | `dev.hansacore.com` | `dev.erp.hansacore.com` | `dev.auth.hansacore.com` |
+
+One login for all app hosts: each app host has its own host-only gateway
+session (`PORTAL_SESSION`), and single sign-on between them comes from
+Keycloak's session on the auth host — opening the portal after logging in to
+the ERP bounces through Keycloak once, without a password prompt. Future
+portal sub-apps go under the portal host as subpaths.
+
 ```text
                                        Internet / Host Browser
                                                   │
@@ -20,13 +37,14 @@ This deployment setup is designed for:
                                └──────────────────┬──────────────────┘
                                                   │
          ┌───────────────────┬────────────────────┼───────────────────┐
-         │ /                 │ /oauth2, /logout,  │ /realms, /js,     │ /admin (separate
-         │                   │ /login/oauth2,     │ /resources        │ Ingress + BasicAuth)
+         │ ERP host: /       │ ERP + portal host: │ auth host:        │ auth host: /admin
+         │ portal host: /    │ /oauth2, /logout,  │ /realms, /js,     │ (separate Ingress
+         │ (placeholder)     │ /login/oauth2,     │ /resources        │  + BasicAuth)
          │                   │ /api, /be          │                   │
          ▼                   ▼                    ▼                   ▼
  ┌──────────────┐    ┌────────────────┐   ┌───────────────┐   ┌───────────────┐
  │hansacore-web │    │ portal-gateway │   │   keycloak    │   │   keycloak    │
- │ (Angular 20) │    │  (Spring BFF)  │   │  (Keycloak 24)│   │ admin console │
+ │portal-placeh.│    │  (Spring BFF)  │   │  (Keycloak 24)│   │ admin console │
  │   Port 80    │    │   Port 8080    │   │   Port 8080   │   └───────────────┘
  └──────────────┘    └───────┬────────┘   └───────┬───────┘
                              │                    │
@@ -54,7 +72,8 @@ This deployment setup is designed for:
 | **`keycloak`** | Keycloak 24.0 (`start`, not `start-dev`) | `8080` | Identity and Access Management with Microsoft Entra ID OIDC identity broker |
 | **`hansacore-api`** | Spring Boot 3.4 / Java 21 | `8081` | Core trading and backoffice REST API resource server |
 | **`portal-gateway`** | Spring Cloud Gateway / BFF | `8080` | Secure session gateway, OAuth2 token relay, and reverse proxy |
-| **`hansacore-web`** | Angular 20 SPA / Nginx | `80` | Frontend web interface |
+| **`hansacore-web`** | Angular 20 SPA / Nginx | `80` | ERP frontend, on the ERP host |
+| **`portal-placeholder`** | Nginx + static page (ConfigMap) | `80` | Stand-in for the portal frontend on the portal host; shows the sign-in state |
 | **`traefik`** | Traefik Ingress Controller | `80 / 443` | Reverse proxy, TLS termination, HTTPS redirect, admin BasicAuth |
 
 ---
@@ -75,34 +94,43 @@ hansacore-deployment/
 │   │   ├── 03-hansacore-api.yaml
 │   │   ├── 04-portal-gateway.yaml
 │   │   ├── 05-hansacore-web.yaml
-│   │   ├── 06-ingress.yaml             # everything except /admin; forces HTTPS
-│   │   ├── 07-ingress-admin.yaml       # /admin only, + BasicAuth middleware
+│   │   ├── 06-ingress-erp.yaml         # ERP host: SPA + gateway paths; forces HTTPS
+│   │   ├── 06-ingress-portal.yaml      # portal host: placeholder + gateway paths
+│   │   ├── 06-ingress-auth.yaml        # auth host: Keycloak OIDC endpoints
+│   │   ├── 07-ingress-admin.yaml       # auth host /admin only, + BasicAuth middleware
 │   │   ├── 08-middlewares.yaml         # Traefik: HTTPS redirect, BasicAuth, HSTS
-│   │   └── 09-networkpolicies.yaml     # default-deny + explicit pod-to-pod allows
+│   │   ├── 09-networkpolicies.yaml     # default-deny + explicit pod-to-pod allows
+│   │   ├── 10-ingress-http-redirect.yaml
+│   │   └── 11-portal-placeholder.yaml  # stand-in portal page (nginx + ConfigMap)
 │   └── overlays/
-│       ├── local-vm/                   # Multipass VM target
-│       │   ├── kustomization.yaml
-│       │   ├── hansacore-env.properties    # the ONE file with this env's hostname
+│       ├── local-vm/                   # DEV: Multipass VM target
+│       │   ├── kustomization.yaml          # Ingress host patches (match the properties)
+│       │   ├── hansacore-env.properties    # this env's hostnames / issuer / CORS
 │       │   └── secrets/*.env.example       # templates; real .env files are git-ignored
-│       └── gcp/                        # GCP VM target (fill in hostname before use)
+│       └── gcp/                        # SIT: GCP VM target
 │           └── ... (same shape as local-vm)
 ├── identity/
 │   └── portal-realm.template.json      # Keycloak realm export, WITH PLACEHOLDERS
-│                                        # (__BASE_URL__, __*_CLIENT_SECRET__, ...)
+│                                        # (__ERP_BASE_URL__, __PORTAL_BASE_URL__,
+│                                        #  __*_CLIENT_SECRET__, ...)
 ├── scripts/
 │   ├── bootstrap-secrets.sh            # generates git-ignored secret files per overlay
-│   └── render-realm.sh                 # renders the realm template -> per-overlay ConfigMap
+│   ├── render-realm.sh                 # renders the realm template -> per-overlay ConfigMap
+│   └── build-images.sh                 # builds the :local images inside the VM
 ├── ssl/                                 # TLS Certificate & Java Truststore automation
-│   ├── generate-certs.sh
-│   ├── cert.conf
-│   └── csr.conf
+│   └── generate-certs.sh               # DEV only; reuses the CA, certs for the dev.* hosts
+├── vm/                                  # LOCAL MULTIPASS DEV CLUSTER ONLY
+│   ├── coredns-custom.yaml             # pods resolve the dev.* names to Traefik
+│   ├── update-hosts.ps1                # Windows hosts file entries for the dev.* names
+│   └── node-ip-guard/                  # heals k3s + CoreDNS after VM IP changes
 ├── .gitignore
 └── README.md
 ```
 
 **Nothing in `k8s/base/` hardcodes a secret, IP, or hostname.** Everything
 environment-specific lives in exactly one place per environment:
-`k8s/overlays/<env>/hansacore-env.properties` (hostname/CORS/issuer) and
+`k8s/overlays/<env>/hansacore-env.properties` (hostnames/CORS/issuer, plus
+the matching Ingress host patches in that overlay's `kustomization.yaml`) and
 `k8s/overlays/<env>/secrets/*.env` (passwords/client secrets, git-ignored).
 That's what makes the local Multipass VM and the future GCP VM both usable
 from the same base manifests.
@@ -137,15 +165,26 @@ from the same base manifests.
    scripts/render-realm.sh local-vm
    ```
 
-3. **Generate TLS certificates & Java truststore:**
+3. **Generate TLS certificates & Java truststore** (inside the VM):
    ```bash
-   bash ssl/generate-certs.sh
+   sudo bash /home/ubuntu/hansacore/hansacore-deployment/ssl/generate-certs.sh
    ```
    This automatically:
-   - Detects the active VM IP.
-   - Generates the Root CA and a server certificate with SANs (`IP:<ip>`, `DNS:k3s-lab.mshome.net`, `DNS:localhost`).
-   - Exports the Root CA into a Java PKCS12 truststore (`truststore.p12`), protected by a randomly generated password (not the well-known "changeit" default).
+   - Creates the Root CA on the first run and reuses it afterwards (delete `ssl/ca.key`/`ssl/ca.crt` to force a new one).
+   - Issues a server certificate for the three hostnames in `k8s/overlays/local-vm/hansacore-env.properties` (plus `localhost` and the VM IP).
+   - Exports the Root CA into a Java PKCS12 truststore (`truststore.p12`), protected by a randomly generated password (not the well-known "changeit" default); only rebuilt when the CA changes.
    - Creates the `hansacore-tls` and `hansacore-ca-trust` Kubernetes secrets in namespace `hansacore`.
+
+   **Name resolution for the `dev.*` hostnames** (they are not in public DNS):
+   ```bash
+   # pods (gateway/API -> Keycloak): answer the names with Traefik's ClusterIP
+   kubectl apply -f vm/coredns-custom.yaml
+   kubectl -n kube-system rollout restart deploy/coredns
+   ```
+   ```powershell
+   # Windows browser: elevated PowerShell, re-run after every VM IP change
+   .\vm\update-hosts.ps1
+   ```
 
 4. **Build the images and import them into k3s** (inside the VM, from the
    repo mount; re-run for a component whenever its code changes):
@@ -165,9 +204,8 @@ from the same base manifests.
    kubectl get pods -n hansacore
    ```
 
-7. **Browse to `https://k3s-lab.mshome.net`** (prefer the stable hostname
-   over the raw VM IP — the IP is DHCP-assigned and can change on VM
-   restart, the hostname doesn't). Log in with one of the seeded users
+7. **Browse to `https://dev.erp.hansacore.com`** (ERP) or
+   `https://dev.hansacore.com` (portal placeholder). Log in with one of the seeded users
    (`consultant`, `daniel.methner@forty2.ch`, `milad.g@forty2.ch`,
    `technical_user@hansacore.com`) using the `SEED_USER_PASSWORD` value from
    `k8s/overlays/local-vm/secrets/seed-users.env` — you'll be prompted to
@@ -194,11 +232,12 @@ Azure AD strictly enforces that all non-localhost redirect URIs must begin with 
 ### Azure Portal Configuration
 1. Go to [Microsoft Entra Admin Center](https://entra.microsoft.com/) $\rightarrow$ **App registrations**.
 2. Select Application ID: `74741127-2028-4328-a8cf-057363b92b42`.
-3. Under **Authentication** $\rightarrow$ **Redirect URIs**, add:
+3. Under **Authentication** $\rightarrow$ **Redirect URIs**, add one per environment's auth host:
    ```text
-   https://<VM-IP-or-hostname>/realms/portal/broker/microsoft/endpoint
+   https://dev.auth.hansacore.com/realms/portal/broker/microsoft/endpoint
+   https://sit.auth.hansacore.com/realms/portal/broker/microsoft/endpoint
    ```
-   *(Prefer `https://k3s-lab.mshome.net/realms/portal/broker/microsoft/endpoint`, since it's stable across VM restarts.)*
+   The DEV name does not need to be publicly resolvable — the redirect happens in the browser.
 
 ### Entra Client Secret
 Under **Certificates & secrets** → **New client secret**, create a secret and copy its
@@ -221,18 +260,17 @@ Import-Certificate -FilePath "ssl\ca.crt" -CertStoreLocation "Cert:\CurrentUser\
 
 ## 5. GCP Lift
 
-1. Provision the GCP Compute Engine VM and point a real DNS name at its
-   static external IP (don't rely on the raw IP the way the original setup
-   did — it made every re-IP a multi-file hand-edit).
-2. Fill in `k8s/overlays/gcp/hansacore-env.properties` with that hostname,
-   and the `tls.hosts` patches in `k8s/overlays/gcp/kustomization.yaml`.
-3. `scripts/bootstrap-secrets.sh gcp` (generates a **separate** set of
+The first GCP environment is SIT; `k8s/overlays/gcp` already carries its
+hostnames (`sit.hansacore.com`, `sit.erp.hansacore.com`, `sit.auth.hansacore.com`).
+
+1. Provision the GCP Compute Engine VM and point public DNS records for all
+   three SIT hostnames at its static external IP.
+2. `scripts/bootstrap-secrets.sh gcp` (generates a **separate** set of
    secrets — never reuse the local-vm ones in a semi-public environment).
-4. `scripts/render-realm.sh gcp`.
-5. Re-run `ssl/generate-certs.sh` against the GCP VM, or better: switch to
-   cert-manager + Let's Encrypt now that there's a real, publicly resolvable
-   domain (see `Architecture/security_review_and_remediation_plan.md`,
-   Phase 4).
+3. `scripts/render-realm.sh gcp`.
+4. TLS: use cert-manager + Let's Encrypt (the SIT names are publicly
+   resolvable) instead of `ssl/generate-certs.sh`, which is DEV-only.
+5. Add the SIT broker redirect URI in Entra (§4).
 6. `kubectl apply -k k8s/overlays/gcp`.
 
 ---
@@ -263,9 +301,10 @@ the VM IP *will* change regularly (several times observed within two days).
 k3s pins the node IP at startup, so after a renumber the cluster keeps
 serving the stale address: pod DNS/egress breaks or crawls, and
 server-to-server calls (notably Keycloak → Microsoft during SSO) time out
-with generic error pages. Everything else (Azure redirect URI, TLS cert,
-ingress) uses the `k3s-lab.mshome.net` hostname, which follows the VM, so
-only k3s itself needs re-converging.
+with generic error pages. Inside the cluster the `dev.*` names resolve to
+Traefik's ClusterIP (`vm/coredns-custom.yaml`), so they are unaffected; on
+Windows re-run `vm/update-hosts.ps1` (elevated) so the browser follows the
+new IP.
 
 Fast diagnosis — these two must agree:
 ```bash
@@ -299,17 +338,21 @@ on confirmed persistent drift, restarts k3s and then CoreDNS. Install it with
 kubectl exec -n hansacore deploy/portal-gateway -- wget -qO- http://localhost:8080/actuator/health
 
 # Keycloak OIDC Discovery
-curl -k https://k3s-lab.mshome.net/realms/portal/.well-known/openid-configuration
+curl -k https://dev.auth.hansacore.com/realms/portal/.well-known/openid-configuration
 
 # Service logs
 kubectl logs -n hansacore deploy/portal-gateway --tail=50 -f
 kubectl logs -n hansacore deploy/hansacore-api --tail=50 -f
 ```
 
+### Changing hostnames on a running cluster
+The realm import only runs on an empty Keycloak database, so after changing
+hostnames also update the live `portal-gateway` client (redirect URIs, web
+origins, `post.logout.redirect.uris`) with `kcadm.sh` inside the Keycloak pod,
+and delete Ingress objects that no longer exist in `k8s/base` —
+`kubectl apply -k` does not remove them.
+
 ### Security notes
-See `Architecture/security_review_and_remediation_plan.md` in the main
-workspace for the full findings/remediation plan this restructuring
-implements (secrets management, the Keycloak `hansacore-api` client fix,
-NetworkPolicies, ingress hardening, etc.) and what's still outstanding
-(git history scrubbing for the secrets that were previously committed, and
-GCP-specific hardening like cert-manager and Cloud SQL).
+Still outstanding: git history scrubbing for the secrets that were previously
+committed, a production profile for `hansacore-api` without dev credentials in
+the image, and GCP-specific hardening like cert-manager and Cloud SQL.

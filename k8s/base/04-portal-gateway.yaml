@@ -1,5 +1,5 @@
-# NOTE: KEYCLOAK_ISSUER_URI / FRONTEND_URL come from the `hansacore-env`
-# ConfigMap (generated per-overlay); KEYCLOAK_CLIENT_SECRET comes from the
+# NOTE: KEYCLOAK_ISSUER_URI comes from the `hansacore-env` ConfigMap
+# (generated per-overlay); KEYCLOAK_CLIENT_SECRET comes from the
 # `keycloak-clients-secret` Secret (generated per-overlay). This base
 # manifest never hardcodes a specific VM IP/hostname or secret value.
 apiVersion: apps/v1
@@ -41,8 +41,9 @@ spec:
               value: "http://hansacore-api.hansacore.svc.cluster.local:8081"
             - name: HANSACORE_WEB_URL
               value: "http://hansacore-web.hansacore.svc.cluster.local:80"
-            # FRONTEND_URL and KEYCLOAK_ISSUER_URI come from hansacore-env
-            # (envFrom above).
+            # KEYCLOAK_ISSUER_URI comes from hansacore-env (envFrom above).
+            # Login/logout redirects are relative to the request host, so
+            # one gateway serves both the ERP and the portal host.
             - name: TRUSTSTORE_PASSWORD
               valueFrom:
                 secretKeyRef:

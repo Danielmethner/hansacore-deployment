@@ -699,23 +699,22 @@
       "clientId": "portal-gateway",
       "name": "Portal Gateway",
       "description": "",
-      "rootUrl": "__BASE_URL__",
-      "adminUrl": "__BASE_URL__",
-      "baseUrl": "__BASE_URL__",
+      "rootUrl": "__ERP_BASE_URL__",
+      "adminUrl": "__ERP_BASE_URL__",
+      "baseUrl": "__ERP_BASE_URL__",
       "surrogateAuthRequired": false,
       "enabled": true,
       "alwaysDisplayInConsole": false,
       "clientAuthenticatorType": "client-secret",
       "secret": "__PORTAL_GATEWAY_CLIENT_SECRET__",
       "redirectUris": [
-        "__BASE_URL__/*",
-        "__BASE_URL__/login/oauth2/code/keycloak",
-        "http://localhost:8080/*",
-        "http://localhost:8080/login/oauth2/code/keycloak",
-        "http://localhost:4200/*"
+        "__ERP_BASE_URL__/login/oauth2/code/keycloak",
+        "__PORTAL_BASE_URL__/login/oauth2/code/keycloak",
+        "http://localhost:8080/login/oauth2/code/keycloak"
       ],
       "webOrigins": [
-        "__BASE_URL__",
+        "__ERP_BASE_URL__",
+        "__PORTAL_BASE_URL__",
         "http://localhost:8080",
         "http://localhost:4200"
       ],
@@ -731,7 +730,7 @@
       "protocol": "openid-connect",
       "attributes": {
         "client.secret.creation.time": "1789030429",
-        "post.logout.redirect.uris": "+",
+        "post.logout.redirect.uris": "__ERP_BASE_URL__##__PORTAL_BASE_URL__##http://localhost:4200",
         "oauth2.device.authorization.grant.enabled": "false",
         "backchannel.logout.revoke.offline.tokens": "false",
         "use.refresh.tokens": "true",
@@ -775,11 +774,11 @@
       "alwaysDisplayInConsole": false,
       "clientAuthenticatorType": "client-secret",
       "redirectUris": [
-        "__BASE_URL__/*",
+        "__PORTAL_BASE_URL__/*",
         "http://localhost:4200/*"
       ],
       "webOrigins": [
-        "__BASE_URL__",
+        "__PORTAL_BASE_URL__",
         "http://localhost:4200"
       ],
       "notBefore": 0,

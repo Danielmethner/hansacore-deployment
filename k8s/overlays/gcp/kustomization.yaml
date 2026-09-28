@@ -35,20 +35,35 @@ secretGenerator:
     options:
       disableNameSuffixHash: true
 
-# TODO before first GCP apply: replace CHANGE-ME below (and in
-# hansacore-env.properties) with the real hostname.
+# SIT hostnames — must match hansacore-env.properties.
 patches:
   - target:
       kind: Ingress
-      name: hansacore-ingress
+      name: hansacore-ingress-erp
     patch: |-
       - op: replace
+        path: /spec/rules/0/host
+        value: sit.erp.hansacore.com
+      - op: replace
         path: /spec/tls/0/hosts/0
-        value: CHANGE-ME.example.com
+        value: sit.erp.hansacore.com
   - target:
       kind: Ingress
-      name: hansacore-ingress-admin
+      name: hansacore-ingress-portal
     patch: |-
       - op: replace
+        path: /spec/rules/0/host
+        value: sit.hansacore.com
+      - op: replace
         path: /spec/tls/0/hosts/0
-        value: CHANGE-ME.example.com
+        value: sit.hansacore.com
+  - target:
+      kind: Ingress
+      name: hansacore-ingress-(auth|admin)
+    patch: |-
+      - op: replace
+        path: /spec/rules/0/host
+        value: sit.auth.hansacore.com
+      - op: replace
+        path: /spec/tls/0/hosts/0
+        value: sit.auth.hansacore.com

@@ -1,0 +1,21 @@
+# LOCAL MULTIPASS DEV CLUSTER ONLY. Makes the DEV hostnames resolvable from
+# inside pods (the gateway and the API call Keycloak via its public issuer URL)
+# by answering them with Traefik's ClusterIP — independent of the VM's
+# DHCP-assigned IP and of the Hyper-V DNS server. k3s' CoreDNS imports
+# `coredns-custom` keys ending in .override into its main server block.
+#
+# Not part of the Kustomize overlay (which forces namespace hansacore). Apply with:
+#   kubectl apply -f vm/coredns-custom.yaml
+#   kubectl -n kube-system rollout restart deploy/coredns
+# Keep the names in sync with k8s/overlays/local-vm/hansacore-env.properties.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coredns-custom
+  namespace: kube-system
+data:
+  hansacore-dev.override: |
+    rewrite stop {
+      name regex ^(dev\.hansacore\.com|dev\.erp\.hansacore\.com|dev\.auth\.hansacore\.com)\.$ traefik.kube-system.svc.cluster.local.
+      answer auto
+    }

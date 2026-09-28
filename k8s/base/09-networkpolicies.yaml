@@ -24,7 +24,7 @@ spec:
     matchExpressions:
       - key: app
         operator: In
-        values: ["hansacore-web", "portal-gateway", "keycloak"]
+        values: ["hansacore-web", "portal-placeholder", "portal-gateway", "keycloak"]
   policyTypes:
     - Ingress
   ingress:

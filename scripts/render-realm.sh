@@ -23,9 +23,15 @@ for f in "$OVERLAY_DIR/hansacore-env.properties" "$SECRETS_DIR/keycloak-clients.
   fi
 done
 
-get_val() { grep -m1 "^$1=" "$2" | cut -d= -f2-; }
+# tr strips CR so files saved with Windows line endings don't leak "\r" into URLs.
+get_val() { grep -m1 "^$1=" "$2" | cut -d= -f2- | tr -d '\r'; }
 
-PUBLIC_HOSTNAME="$(get_val PUBLIC_HOSTNAME "$OVERLAY_DIR/hansacore-env.properties")"
+ERP_HOSTNAME="$(get_val ERP_HOSTNAME "$OVERLAY_DIR/hansacore-env.properties")"
+PORTAL_HOSTNAME="$(get_val PORTAL_HOSTNAME "$OVERLAY_DIR/hansacore-env.properties")"
+if [ -z "$ERP_HOSTNAME" ] || [ -z "$PORTAL_HOSTNAME" ]; then
+  echo "ERP_HOSTNAME and PORTAL_HOSTNAME must be set in $OVERLAY_DIR/hansacore-env.properties" >&2
+  exit 1
+fi
 PORTAL_GATEWAY_CLIENT_SECRET="$(get_val PORTAL_GATEWAY_CLIENT_SECRET "$SECRETS_DIR/keycloak-clients.env")"
 HANSACORE_API_CLIENT_SECRET="$(get_val HANSACORE_API_CLIENT_SECRET "$SECRETS_DIR/keycloak-clients.env")"
 MICROSOFT_CLIENT_SECRET="$(get_val MICROSOFT_CLIENT_SECRET "$SECRETS_DIR/keycloak-clients.env")"
@@ -38,7 +44,8 @@ fi
 # Escape sed-replacement metacharacters (&, backslash, and the # delimiter)
 # so any Entra-generated secret value renders verbatim.
 MICROSOFT_CLIENT_SECRET_ESC="$(printf '%s' "$MICROSOFT_CLIENT_SECRET" | sed -e 's/[\\&#]/\\&/g')"
-BASE_URL="https://${PUBLIC_HOSTNAME}"
+ERP_BASE_URL="https://${ERP_HOSTNAME}"
+PORTAL_BASE_URL="https://${PORTAL_HOSTNAME}"
 
 # Use a temp file inside the repo tree (not /tmp) so it resolves correctly
 # whether this runs under Git Bash, WSL, or a real Linux shell, and whether
@@ -47,7 +54,8 @@ TMP_JSON="$OVERLAY_DIR/.portal-realm.rendered.json.tmp"
 trap 'rm -f "$TMP_JSON"' EXIT
 
 sed \
-  -e "s#__BASE_URL__#${BASE_URL}#g" \
+  -e "s#__ERP_BASE_URL__#${ERP_BASE_URL}#g" \
+  -e "s#__PORTAL_BASE_URL__#${PORTAL_BASE_URL}#g" \
   -e "s#__PORTAL_GATEWAY_CLIENT_SECRET__#${PORTAL_GATEWAY_CLIENT_SECRET}#g" \
   -e "s#__HANSACORE_API_CLIENT_SECRET__#${HANSACORE_API_CLIENT_SECRET}#g" \
   -e "s#__MICROSOFT_CLIENT_SECRET__#${MICROSOFT_CLIENT_SECRET_ESC}#g" \
@@ -59,4 +67,4 @@ sed \
   -n hansacore \
   --dry-run=client -o yaml > "$OVERLAY_DIR/02a-keycloak-realm-cm.generated.yaml"
 
-echo "Wrote $OVERLAY_DIR/02a-keycloak-realm-cm.generated.yaml (base URL: $BASE_URL)"
+echo "Wrote $OVERLAY_DIR/02a-keycloak-realm-cm.generated.yaml (ERP: $ERP_BASE_URL, portal: $PORTAL_BASE_URL)"

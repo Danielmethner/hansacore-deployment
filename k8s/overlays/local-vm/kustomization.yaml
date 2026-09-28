@@ -39,24 +39,40 @@ secretGenerator:
     options:
       disableNameSuffixHash: true
 
-# The two Ingress objects in base ship with a placeholder TLS host — patch in
-# the real one here so the base manifests never hardcode an environment's
-# hostname.
+# The Ingress objects in base ship with placeholder hosts — patch in this
+# environment's real ones (must match hansacore-env.properties) so the base
+# manifests never hardcode a hostname.
 patches:
   - target:
       kind: Ingress
-      name: hansacore-ingress
+      name: hansacore-ingress-erp
     patch: |-
       - op: replace
+        path: /spec/rules/0/host
+        value: dev.erp.hansacore.com
+      - op: replace
         path: /spec/tls/0/hosts/0
-        value: k3s-lab.mshome.net
+        value: dev.erp.hansacore.com
   - target:
       kind: Ingress
-      name: hansacore-ingress-admin
+      name: hansacore-ingress-portal
     patch: |-
       - op: replace
+        path: /spec/rules/0/host
+        value: dev.hansacore.com
+      - op: replace
         path: /spec/tls/0/hosts/0
-        value: k3s-lab.mshome.net
+        value: dev.hansacore.com
+  - target:
+      kind: Ingress
+      name: hansacore-ingress-(auth|admin)
+    patch: |-
+      - op: replace
+        path: /spec/rules/0/host
+        value: dev.auth.hansacore.com
+      - op: replace
+        path: /spec/tls/0/hosts/0
+        value: dev.auth.hansacore.com
 
   - target:
       kind: Deployment
