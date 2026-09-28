@@ -1,0 +1,57 @@
+# DEV only: the Java services trust the self-signed CA from ssl/ via the
+# hansacore-ca-trust Secret (created by ssl/generate-certs.sh).
+# TRUSTSTORE_PASSWORD must come before JAVA_TOOL_OPTIONS so that
+# $(TRUSTSTORE_PASSWORD) resolves.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hansacore-api
+  namespace: hansacore
+spec:
+  template:
+    spec:
+      containers:
+        - name: hansacore-api
+          env:
+            - name: TRUSTSTORE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: hansacore-ca-trust
+                  key: TRUSTSTORE_PASSWORD
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Djavax.net.ssl.trustStore=/etc/ssl/certs/hansacore/truststore.p12 -Djavax.net.ssl.trustStorePassword=$(TRUSTSTORE_PASSWORD)"
+          volumeMounts:
+            - name: ca-trust-volume
+              mountPath: /etc/ssl/certs/hansacore
+              readOnly: true
+      volumes:
+        - name: ca-trust-volume
+          secret:
+            secretName: hansacore-ca-trust
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: portal-gateway
+  namespace: hansacore
+spec:
+  template:
+    spec:
+      containers:
+        - name: portal-gateway
+          env:
+            - name: TRUSTSTORE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: hansacore-ca-trust
+                  key: TRUSTSTORE_PASSWORD
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Djavax.net.ssl.trustStore=/etc/ssl/certs/hansacore/truststore.p12 -Djavax.net.ssl.trustStorePassword=$(TRUSTSTORE_PASSWORD)"
+          volumeMounts:
+            - name: ca-trust-volume
+              mountPath: /etc/ssl/certs/hansacore
+              readOnly: true
+      volumes:
+        - name: ca-trust-volume
+          secret:
+            secretName: hansacore-ca-trust

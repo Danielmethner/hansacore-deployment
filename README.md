@@ -102,13 +102,18 @@ hansacore-deployment/
 │   │   ├── 09-networkpolicies.yaml     # default-deny + explicit pod-to-pod allows
 │   │   ├── 10-ingress-http-redirect.yaml
 │   │   └── 11-portal-placeholder.yaml  # stand-in portal page (nginx + ConfigMap)
+│   ├── components/
+│   │   └── demo-data/                  # demo tenants/users for the API (both overlays)
+│   │       ├── kustomization.yaml          # ConfigMap generator + api mount/import
+│   │       └── demo-data.yml               # git-ignored (real names/emails)
 │   └── overlays/
 │       ├── local-vm/                   # DEV: Multipass VM target
-│       │   ├── kustomization.yaml          # Ingress host patches (match the properties)
+│       │   ├── kustomization.yaml          # Ingress host patches, api profile `dev`
+│       │   ├── dev-ca-trust.patch.yaml     # DEV-only CA truststore for api + gateway
 │       │   ├── hansacore-env.properties    # this env's hostnames / issuer / CORS
 │       │   └── secrets/*.env.example       # templates; real .env files are git-ignored
 │       └── gcp/                        # SIT: GCP VM target
-│           └── ... (same shape as local-vm)
+│           └── ... (same shape as local-vm; api profile `sit`, no truststore)
 ├── identity/
 │   └── portal-realm.template.json      # Keycloak realm export, WITH PLACEHOLDERS
 │                                        # (__ERP_BASE_URL__, __PORTAL_BASE_URL__,
@@ -134,6 +139,40 @@ the matching Ingress host patches in that overlay's `kustomization.yaml`) and
 `k8s/overlays/<env>/secrets/*.env` (passwords/client secrets, git-ignored).
 That's what makes the local Multipass VM and the future GCP VM both usable
 from the same base manifests.
+
+### API profiles, truststore and demo data
+
+The same `hansacore-api` image runs everywhere; the overlay decides how.
+
+| | DEV (`local-vm`) | SIT (`gcp`) |
+| :--- | :--- | :--- |
+| `SPRING_PROFILES_ACTIVE` (api only) | `dev` (smoke tests run) | `sit` (Swagger off) |
+| Custom CA truststore | yes, `dev-ca-trust.patch.yaml` | no, JVM default (public certs) |
+| Demo tenants/users | `components/demo-data` | `components/demo-data` |
+| `HANSACORE_DEMODATA_ENABLED` | `true` | `true` (for now) |
+
+- **No hidden default profile.** `application.properties` doesn't set one, so
+  the profile always comes from the overlay (or `-Dspring-boot.run.profiles=dev`
+  / the IDE run configuration locally). It is patched onto the api
+  Deployment only, not into `hansacore-env`, because the gateway reads that
+  ConfigMap too.
+- **No dev credentials in the image.** `hansacore-api/.dockerignore` keeps
+  the git-ignored `application-dev.properties` (and `-local`, `-forty2`,
+  `vpn_templates/`, `demo-data-local.yml`) out of the build context. In the
+  cluster, datasource, issuer and CORS always come from env.
+- **Truststore is DEV-only.** `ssl/generate-certs.sh` creates the
+  `hansacore-ca-trust` Secret; only the local-vm overlay mounts it and sets
+  `JAVA_TOOL_OPTIONS`. Heap flags live in `JDK_JAVA_OPTIONS` in base, so
+  they're kept on both environments.
+- **Seeding switch.** On a fresh database the API always creates the system
+  users and roles, plus reference data (currencies, countries, DAX40). With
+  `HANSACORE_DEMODATA_ENABLED=true` it also seeds the tenants/users from
+  `demo-data.yml` and sample content. The first start records
+  `DEMO_DATA_CREATED` either way, so **changing the switch later has no
+  effect** until the `hansacore` database is recreated.
+- **`demo-data.yml` is git-ignored** (real names and emails). Copy it into
+  `k8s/components/demo-data/` on every machine that renders an overlay,
+  otherwise `kubectl apply -k` fails.
 
 ---
 
@@ -269,9 +308,13 @@ hostnames (`sit.hansacore.com`, `sit.erp.hansacore.com`, `sit.auth.hansacore.com
    secrets — never reuse the local-vm ones in a semi-public environment).
 3. `scripts/render-realm.sh gcp`.
 4. TLS: use cert-manager + Let's Encrypt (the SIT names are publicly
-   resolvable) instead of `ssl/generate-certs.sh`, which is DEV-only.
+   resolvable) instead of `ssl/generate-certs.sh`, which is DEV-only. The
+   gcp overlay has no custom truststore, so the Java services rely on the
+   public certificate chain.
 5. Add the SIT broker redirect URI in Entra (§4).
-6. `kubectl apply -k k8s/overlays/gcp`.
+6. Copy `demo-data.yml` into `k8s/components/demo-data/` (see §2), and
+   decide `HANSACORE_DEMODATA_ENABLED` before the first start.
+7. `kubectl apply -k k8s/overlays/gcp`.
 
 ---
 
@@ -353,6 +396,6 @@ and delete Ingress objects that no longer exist in `k8s/base` —
 `kubectl apply -k` does not remove them.
 
 ### Security notes
-Still outstanding: git history scrubbing for the secrets that were previously
-committed, a production profile for `hansacore-api` without dev credentials in
-the image, and GCP-specific hardening like cert-manager and Cloud SQL.
+Still outstanding: git history scrubbing (and rotation) for the secrets that
+were previously committed, and GCP-specific hardening like cert-manager.
+The `hansacore-api` image no longer contains dev credentials (§2).

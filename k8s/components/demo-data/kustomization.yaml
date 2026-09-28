@@ -1,0 +1,39 @@
+# Demo tenants and users (Forty2 / Knowledge Pulse) for hansacore-api.
+# demo-data.yml is git-ignored (real names and emails): copy it into this
+# directory on every machine that renders an overlay using this component.
+# Whether the API seeds it is decided by HANSACORE_DEMODATA_ENABLED in the
+# overlay's hansacore-env.properties, and only on a fresh database.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+configMapGenerator:
+  - name: hansacore-demo-data
+    files:
+      - demo-data.yml
+
+patches:
+  - target:
+      kind: Deployment
+      name: hansacore-api
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: hansacore-api
+        namespace: hansacore
+      spec:
+        template:
+          spec:
+            containers:
+              - name: hansacore-api
+                env:
+                  - name: SPRING_CONFIG_IMPORT
+                    value: "optional:file:/app/config/demo-data.yml"
+                volumeMounts:
+                  - name: demo-data-volume
+                    mountPath: /app/config/demo-data.yml
+                    subPath: demo-data.yml
+            volumes:
+              - name: demo-data-volume
+                configMap:
+                  name: hansacore-demo-data

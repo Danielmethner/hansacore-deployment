@@ -28,9 +28,8 @@ spec:
           envFrom:
             - configMapRef:
                 name: hansacore-env
+          # SPRING_PROFILES_ACTIVE and the DEV CA truststore are set per overlay.
           env:
-            - name: SPRING_PROFILES_ACTIVE
-              value: "dev"
             - name: PORT
               value: "8081"
             - name: SPRING_DATASOURCE_URL
@@ -43,27 +42,17 @@ spec:
                   name: postgres-secret
                   key: HANSACORE_API_PASSWORD
             # CORS_ALLOWED_ORIGINS comes from hansacore-env (envFrom above) and
-            # binds to `cors.allowed.origins` by relaxed binding. KEYCLOAK_ISSUER_URI
-            # does not: application.properties only reads it via a `${...}`
-            # placeholder, and the active `dev` profile replaces that whole line
-            # with a localhost literal. Binding the canonical Spring property name
-            # here wins outright, since OS env outranks every application*.properties.
+            # binds to `cors.allowed.origins` by relaxed binding. The issuer is
+            # bound by its canonical Spring property name, since OS env outranks
+            # every application*.properties, whatever a profile file sets.
             - name: SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI
               valueFrom:
                 configMapKeyRef:
                   name: hansacore-env
                   key: KEYCLOAK_ISSUER_URI
-            - name: TRUSTSTORE_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: hansacore-ca-trust
-                  key: TRUSTSTORE_PASSWORD
-            - name: JAVA_TOOL_OPTIONS
-              value: "-XX:MaxRAMPercentage=75.0 -XX:+UseZGC -Djavax.net.ssl.trustStore=/etc/ssl/certs/hansacore/truststore.p12 -Djavax.net.ssl.trustStorePassword=$(TRUSTSTORE_PASSWORD)"
-          volumeMounts:
-            - name: ca-trust-volume
-              mountPath: /etc/ssl/certs/hansacore
-              readOnly: true
+            # JAVA_TOOL_OPTIONS is left to the overlays (DEV truststore).
+            - name: JDK_JAVA_OPTIONS
+              value: "-XX:MaxRAMPercentage=75.0 -XX:+UseZGC"
           resources:
             requests:
               cpu: 250m
@@ -83,10 +72,6 @@ spec:
               port: 8081
             initialDelaySeconds: 45
             periodSeconds: 15
-      volumes:
-        - name: ca-trust-volume
-          secret:
-            secretName: hansacore-ca-trust
 ---
 apiVersion: v1
 kind: Service

@@ -44,17 +44,9 @@ spec:
             # KEYCLOAK_ISSUER_URI comes from hansacore-env (envFrom above).
             # Login/logout redirects are relative to the request host, so
             # one gateway serves both the ERP and the portal host.
-            - name: TRUSTSTORE_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: hansacore-ca-trust
-                  key: TRUSTSTORE_PASSWORD
-            - name: JAVA_TOOL_OPTIONS
-              value: "-Xms128m -Xmx256m -Djavax.net.ssl.trustStore=/etc/ssl/certs/hansacore/truststore.p12 -Djavax.net.ssl.trustStorePassword=$(TRUSTSTORE_PASSWORD)"
-          volumeMounts:
-            - name: ca-trust-volume
-              mountPath: /etc/ssl/certs/hansacore
-              readOnly: true
+            # JAVA_TOOL_OPTIONS is left to the overlays (DEV truststore).
+            - name: JDK_JAVA_OPTIONS
+              value: "-Xms128m -Xmx256m"
           resources:
             requests:
               cpu: 100m
@@ -74,10 +66,6 @@ spec:
               port: 8080
             initialDelaySeconds: 30
             periodSeconds: 15
-      volumes:
-        - name: ca-trust-volume
-          secret:
-            secretName: hansacore-ca-trust
 ---
 apiVersion: v1
 kind: Service

@@ -9,10 +9,10 @@ resources:
   # rendered secret values. Run that script before `kubectl apply -k .`.
   - 02a-keycloak-realm-cm.generated.yaml
 
+components:
+  - ../../components/demo-data
+
 configMapGenerator:
-  - name: hansacore-demo-data
-    files:
-      - demo-data.yml
   - name: hansacore-env
     envs:
       - hansacore-env.properties
@@ -74,24 +74,18 @@ patches:
         path: /spec/tls/0/hosts/0
         value: dev.auth.hansacore.com
 
+  # Only here, not in the shared hansacore-env ConfigMap: the gateway reads
+  # that too and must not run the API's profile.
   - target:
       kind: Deployment
       name: hansacore-api
     patch: |-
       - op: add
-        path: /spec/template/spec/containers/0/volumeMounts/-
-        value:
-          name: demo-data-volume
-          mountPath: /app/config/demo-data.yml
-          subPath: demo-data.yml
-      - op: add
-        path: /spec/template/spec/volumes/-
-        value:
-          name: demo-data-volume
-          configMap:
-            name: hansacore-demo-data
-      - op: add
         path: /spec/template/spec/containers/0/env/-
         value:
-          name: SPRING_CONFIG_IMPORT
-          value: "optional:file:/app/config/demo-data.yml"
+          name: SPRING_PROFILES_ACTIVE
+          value: "dev"
+
+  # The self-signed DEV CA is trusted only in this overlay; SIT uses public
+  # certificates and the JVM's default truststore.
+  - path: dev-ca-trust.patch.yaml
