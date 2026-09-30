@@ -6,7 +6,7 @@ metadata:
 spec:
   secretName: hansacore-tls
   issuerRef:
-    name: letsencrypt-staging
+    name: letsencrypt-prod
     kind: ClusterIssuer
   dnsNames:
     - sit.hansacore.com
