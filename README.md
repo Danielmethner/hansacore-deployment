@@ -2,9 +2,11 @@
 
 Infrastructure-as-Code and Kubernetes manifests for deploying the **HansaCore** platform on a single-node **k3s Kubernetes cluster**.
 
-This deployment setup is designed for:
-1. **Local Development / Simulation**: Running inside an Ubuntu 24.04 VM via **Canonical Multipass** on Windows 11 Hyper-V.
-2. **Cloud Target (GCP ACE Exam)**: Deployable directly to a single-node **Google Cloud Compute Engine VM** running k3s.
+The same base manifests run in two places; each has its own Kustomize overlay:
+1. **DEV (`overlays/local-vm`)**: an Ubuntu 24.04 VM via **Canonical Multipass** on Windows 11 Hyper-V (§3).
+2. **SIT (`overlays/gcp`)**: a single **Google Cloud Compute Engine VM** (`hansacore-sit-vm`, europe-west6) running k3s, with public DNS and Let's Encrypt certificates (§5).
+
+Deploying a change is `git pull`, optionally rebuild images, then `kubectl apply -k <overlay>`; see §5 ("Deploying changes") for the exact routine.
 
 ---
 
@@ -38,8 +40,8 @@ portal sub-apps go under the portal host as subpaths.
                                                   │
          ┌───────────────────┬────────────────────┼───────────────────┐
          │ ERP host: /       │ ERP + portal host: │ auth host:        │ auth host: /admin
-         │ portal host: /    │ /oauth2, /logout,  │ /realms, /js,     │ (separate Ingress
-         │ (placeholder)     │ /login/oauth2,     │ /resources        │  + BasicAuth)
+         │ portal host: /    │ /oauth2, /logout,  │ /realms, /js,     │ (own Ingress;   
+         │ (placeholder)     │ /login/oauth2,     │ /resources        │  BasicAuth: DEV)
          │                   │ /api, /be          │                   │
          ▼                   ▼                    ▼                   ▼
  ┌──────────────┐    ┌────────────────┐   ┌───────────────┐   ┌───────────────┐
@@ -68,13 +70,18 @@ portal sub-apps go under the portal host as subpaths.
 
 | Service | Technology | Port | Purpose |
 | :--- | :--- | :--- | :--- |
-| **`postgres`** | PostgreSQL 16 Alpine | `5432` | Dual database instance (`hansacore` and `keycloak`) with persistent storage |
+| **`postgres`** | PostgreSQL 16 Alpine | `5432` | Dual database instance (`hansacore` and `keycloak`). DEV: `local-path` PVC; SIT: `hostPath` on a dedicated pd-ssd data disk |
 | **`keycloak`** | Keycloak 24.0 (`start`, not `start-dev`) | `8080` | Identity and Access Management with Microsoft Entra ID OIDC identity broker |
 | **`hansacore-api`** | Spring Boot 3.4 / Java 21 | `8081` | Core trading and backoffice REST API resource server |
 | **`portal-gateway`** | Spring Cloud Gateway / BFF | `8080` | Secure session gateway, OAuth2 token relay, and reverse proxy |
 | **`hansacore-web`** | Angular 20 SPA / Nginx | `80` | ERP frontend, on the ERP host |
 | **`portal-placeholder`** | Nginx + static page (ConfigMap) | `80` | Stand-in for the portal frontend on the portal host; shows the sign-in state |
-| **`traefik`** | Traefik Ingress Controller | `80 / 443` | Reverse proxy, TLS termination, HTTPS redirect, admin BasicAuth |
+| **`traefik`** | Traefik Ingress Controller | `80 / 443` | Reverse proxy, TLS termination, HTTPS redirect, security headers, admin BasicAuth (DEV only) |
+
+All JVM services (`keycloak`, `hansacore-api`, `portal-gateway`) have a **`startupProbe`**
+in base. Their cold start is slow (Keycloak's non-optimized `start` runs a ~70 s
+build step; the API needs several minutes on a 2-vCPU node), and without it the
+liveness probe kills them in a restart loop.
 
 ---
 
@@ -88,7 +95,8 @@ hansacore-deployment/
 │   │   ├── kustomization.yaml
 │   │   ├── 00-namespace.yaml
 │   │   ├── 01-postgres.yaml            # PVC, Deployment, Service (init.sh reads
-│   │   │                               # DB passwords from env, not baked in)
+│   │   │                               # DB passwords from env, not baked in).
+│   │   │                               # The gcp overlay swaps the PVC for a hostPath.
 │   │   ├── 02-keycloak.yaml            # `start` (not `start-dev`), hostname from
 │   │   │                               # hansacore-env ConfigMap, admin pw from Secret
 │   │   ├── 03-hansacore-api.yaml
@@ -98,7 +106,9 @@ hansacore-deployment/
 │   │   ├── 06-ingress-portal.yaml      # portal host: placeholder + gateway paths
 │   │   ├── 06-ingress-auth.yaml        # auth host: Keycloak OIDC endpoints
 │   │   ├── 07-ingress-admin.yaml       # auth host /admin only, + BasicAuth middleware
-│   │   ├── 08-middlewares.yaml         # Traefik: HTTPS redirect, BasicAuth, HSTS
+│   │   │                               # (the gcp overlay removes the BasicAuth, see §6)
+│   │   ├── 08-middlewares.yaml         # Traefik: HTTPS redirect, BasicAuth, HSTS,
+│   │   │                               # X-Frame-Options SAMEORIGIN
 │   │   ├── 09-networkpolicies.yaml     # default-deny + explicit pod-to-pod allows
 │   │   ├── 10-ingress-http-redirect.yaml
 │   │   └── 11-portal-placeholder.yaml  # stand-in portal page (nginx + ConfigMap)
@@ -113,7 +123,12 @@ hansacore-deployment/
 │       │   ├── hansacore-env.properties    # this env's hostnames / issuer / CORS
 │       │   └── secrets/*.env.example       # templates; real .env files are git-ignored
 │       └── gcp/                        # SIT: GCP VM target
-│           └── ... (same shape as local-vm; api profile `sit`, no truststore)
+│           ├── kustomization.yaml          # host patches, api profile `sit`, Postgres
+│           │                               # hostPath, admin Ingress without BasicAuth
+│           ├── 04-cert-issuers.yaml        # cert-manager ClusterIssuers (LE staging + prod)
+│           ├── 05-certificate.yaml         # one Certificate, 3 SANs -> Secret hansacore-tls
+│           ├── hansacore-env.properties    # SIT hostnames / issuer / CORS
+│           └── secrets/*.env.example       # templates; no custom truststore
 ├── identity/
 │   └── portal-realm.template.json      # Keycloak realm export, WITH PLACEHOLDERS
 │                                        # (__ERP_BASE_URL__, __PORTAL_BASE_URL__,
@@ -121,7 +136,8 @@ hansacore-deployment/
 ├── scripts/
 │   ├── bootstrap-secrets.sh            # generates git-ignored secret files per overlay
 │   ├── render-realm.sh                 # renders the realm template -> per-overlay ConfigMap
-│   └── build-images.sh                 # builds the :local images inside the VM
+│   ├── build-images.sh                 # builds the :local images on the VM (DEV and SIT)
+│   └── rebuild-local-db.ps1            # DEV: drops the hansacore schema and re-seeds
 ├── ssl/                                 # TLS Certificate & Java Truststore automation
 │   └── generate-certs.sh               # DEV only; reuses the CA, certs for the dev.* hosts
 ├── vm/                                  # LOCAL MULTIPASS DEV CLUSTER ONLY
@@ -137,8 +153,8 @@ environment-specific lives in exactly one place per environment:
 `k8s/overlays/<env>/hansacore-env.properties` (hostnames/CORS/issuer, plus
 the matching Ingress host patches in that overlay's `kustomization.yaml`) and
 `k8s/overlays/<env>/secrets/*.env` (passwords/client secrets, git-ignored).
-That's what makes the local Multipass VM and the future GCP VM both usable
-from the same base manifests.
+That's what makes the local Multipass VM and the GCP VM both usable from
+the same base manifests.
 
 ### API profiles, truststore and demo data
 
@@ -235,8 +251,8 @@ The same `hansacore-api` image runs everywhere; the overlay decides how.
    ```bash
    kubectl apply -k k8s/overlays/local-vm
    ```
-   This replaces the old "apply each file in order" workflow — Kustomize
-   handles namespace, generated ConfigMaps/Secrets, and ordering.
+   Kustomize handles the namespace and the generated ConfigMaps/Secrets.
+   Re-run this command after every `git pull` (see §5).
 
 6. **Verify all pods are running:**
    ```bash
@@ -297,31 +313,119 @@ Import-Certificate -FilePath "ssl\ca.crt" -CertStoreLocation "Cert:\CurrentUser\
 
 ---
 
-## 5. GCP Lift
+## 5. GCP (SIT)
 
-The first GCP environment is SIT; `k8s/overlays/gcp` already carries its
-hostnames (`sit.hansacore.com`, `sit.erp.hansacore.com`, `sit.auth.hansacore.com`).
+SIT is a single Compute Engine VM running k3s, deployed **manually** from the
+VM itself (no CI/CD yet). `k8s/overlays/gcp` carries its hostnames
+(`sit.hansacore.com`, `sit.erp.hansacore.com`, `sit.auth.hansacore.com`).
 
-1. Provision the GCP Compute Engine VM and point public DNS records for all
-   three SIT hostnames at its static external IP.
-2. `scripts/bootstrap-secrets.sh gcp` (generates a **separate** set of
-   secrets — never reuse the local-vm ones in a semi-public environment).
-3. `scripts/render-realm.sh gcp`.
-4. TLS: use cert-manager + Let's Encrypt (the SIT names are publicly
-   resolvable) instead of `ssl/generate-certs.sh`, which is DEV-only. The
-   gcp overlay has no custom truststore, so the Java services rely on the
-   public certificate chain.
-5. Add the SIT broker redirect URI in Entra (§4).
-6. Copy `demo-data.yml` into `k8s/components/demo-data/` (see §2), and
-   decide `HANSACORE_DEMODATA_ENABLED` before the first start.
-7. `kubectl apply -k k8s/overlays/gcp`.
+### How it is set up
+
+| Piece | Setup |
+| :--- | :--- |
+| VM | `hansacore-sit-vm`, `e2-standard-2`, zone `europe-west6-a` (Zurich), Ubuntu, Docker + k3s |
+| Network | Own VPC, static external IP; firewall allows only 80/443 from the internet, SSH only via **IAP** |
+| Storage | Separate pd-ssd data disk (`auto-delete=no`) mounted at `/mnt/disks/postgres-data` (fstab, by UUID, `nofail`); Postgres uses it via a `hostPath` patch in the gcp overlay |
+| Repos | The four repos are cloned side by side under `~/hansacore/` (`hansacore-api`, `hansacore-web`, `hansacore-portal`, `hansacore-deployment`); read-only fine-grained GitHub token |
+| Images | Built on the VM (`scripts/build-images.sh`) and imported into k3s' containerd as `:local`; nothing is pushed to a registry yet |
+| DNS | The three SIT names point at the static IP. ACME challenges are delegated (CNAME) into a dedicated Cloud DNS zone (`hansacore-sit-acme-zone`) |
+| TLS | cert-manager + Let's Encrypt (DNS-01). The `ClusterIssuer` uses the VM's service account through the metadata server, so no key files exist |
+| IAM | The VM's service account has `roles/dns.admin` **only on the ACME zone** (never on the main zone) and reader access to the Artifact Registry repo |
+
+`kubectl` on the VM needs `export KUBECONFIG=~/.kube/config` (k3s' default
+config file is root-only); this is set in `~/.bashrc`.
+
+### First-time setup
+
+1. Provision the VM, disks, firewall and service account; create the DNS
+   records for all three SIT hostnames.
+2. On the VM: install Docker and k3s, format and mount the data disk,
+   clone the repos under `~/hansacore/`.
+3. `scripts/bootstrap-secrets.sh gcp` (generates a **separate** set of
+   secrets; never reuse the local-vm ones). **Save the printed BasicAuth
+   password.** The Keycloak admin password is in
+   `k8s/overlays/gcp/secrets/keycloak-admin.env`.
+4. Put the real `MICROSOFT_CLIENT_SECRET` into
+   `secrets/keycloak-clients.env`, then `scripts/render-realm.sh gcp`.
+5. Copy `demo-data.yml` into `k8s/components/demo-data/` (it is git-ignored;
+   e.g. `gcloud compute scp --tunnel-through-iap`), and decide
+   `HANSACORE_DEMODATA_ENABLED` before the first start.
+6. Install cert-manager (consider pinning a release instead of `latest`):
+   ```bash
+   kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
+   ```
+7. `bash scripts/build-images.sh` (all three images).
+8. Add the SIT broker redirect URI in Entra (§4).
+9. `kubectl apply -k k8s/overlays/gcp`, then wait: a cold start takes
+   about 5-10 minutes (see §6).
+
+### Deploying changes
+
+`git pull` alone changes nothing in the cluster: the running Deployments only
+change when you **apply the manifests** (and, for code changes, rebuild the image).
+
+```powershell
+# 1. On your machine: push your changes to GitHub (each repo you touched).
+
+# 2. Open a shell on the VM (SSH goes through IAP):
+gcloud compute ssh hansacore-sit-vm --zone=europe-west6-a --tunnel-through-iap
+```
+
+```bash
+# 3. Pull every repo you changed (all four live side by side):
+cd ~/hansacore/hansacore-deployment && git pull      # repeat in the other repos
+
+# 4. Code changed in api / portal gateway / web? Rebuild those images:
+bash scripts/build-images.sh api            # or: gateway | web | (no args = all)
+
+# 5. Realm template or hostnames/secrets changed? Re-render the realm ConfigMap:
+scripts/render-realm.sh gcp
+
+# 6. Apply the manifests (after EVERY pull of hansacore-deployment):
+kubectl apply -k k8s/overlays/gcp
+
+# 7. Rebuilt an image? The tag stays `:local`, so apply sees no change.
+#    Restart the affected Deployment to pick up the new image:
+kubectl rollout restart deploy/hansacore-api -n hansacore    # or portal-gateway / hansacore-web
+
+# 8. Watch it come up and check the endpoints:
+kubectl get pods -n hansacore -w
+curl -s https://sit.auth.hansacore.com/realms/portal/.well-known/openid-configuration | head -c 100; echo
+curl -sI https://sit.hansacore.com | head -3
+```
+
+Notes:
+- Only manifest changes: steps 3, 6, 8. Only app code: steps 3, 4, 7, 8.
+- A rolling update briefly runs two copies of a service on the small node.
+  The old one is removed as soon as the new one is Ready.
+- `kubectl apply -k` never deletes objects that were removed from `base`;
+  delete those by hand (`kubectl delete ...`).
+- The realm import only runs on an empty Keycloak database (§6).
+
+### Stopping and starting the VM
+
+Stopping SIT when it is not in use saves the compute cost (roughly $64 a
+month running); disks and the static IP keep costing a little. Everything
+(k3s, data disk, pods, certificate) comes back by itself, about 5-6 minutes
+after the VM is up.
+
+```powershell
+gcloud compute instances stop  hansacore-sit-vm --zone=europe-west6-a
+gcloud compute instances start hansacore-sit-vm --zone=europe-west6-a
+```
+
+Check afterwards that the Postgres data disk is mounted
+(`findmnt /mnt/disks/postgres-data`). It is mounted with `nofail`, so a
+failed mount would not stop the boot, and Postgres would silently start on an
+empty directory.
 
 ---
 
 ## 6. Maintenance & Troubleshooting
 
 ### Reset Keycloak Database & Re-import Realm
-If `identity/portal-realm.template.json` is updated:
+If `identity/portal-realm.template.json` is updated (shown for DEV; use `gcp`
+and `k8s/overlays/gcp` for SIT):
 ```bash
 # 1. Re-render the ConfigMap for your overlay
 scripts/render-realm.sh local-vm
@@ -336,7 +440,7 @@ kubectl apply -k k8s/overlays/local-vm
 kubectl rollout restart deploy/keycloak -n hansacore
 ```
 
-### VM IP Changes (Host Sleep / Reboot / Network Switch)
+### VM IP Changes (Host Sleep / Reboot / Network Switch) — DEV only
 
 The Multipass VM gets its IP via DHCP from Hyper-V's Default Switch, which
 Windows recreates whenever the host sleeps, reboots, or changes networks —
@@ -380,13 +484,31 @@ on confirmed persistent drift, restarts k3s and then CoreDNS. Install it with
 # Gateway health (actuator is not exposed on the public ingress)
 kubectl exec -n hansacore deploy/portal-gateway -- wget -qO- http://localhost:8080/actuator/health
 
-# Keycloak OIDC Discovery
+# Keycloak OIDC Discovery (DEV uses a private CA, hence -k; SIT has a trusted certificate)
 curl -k https://dev.auth.hansacore.com/realms/portal/.well-known/openid-configuration
+curl https://sit.auth.hansacore.com/realms/portal/.well-known/openid-configuration
 
-# Service logs
+# Service logs (-f follows; --previous shows the container before the last restart)
 kubectl logs -n hansacore deploy/portal-gateway --tail=50 -f
 kubectl logs -n hansacore deploy/hansacore-api --tail=50 -f
+kubectl logs -n hansacore deploy/keycloak --previous
+
+# Why is a pod restarting? Read the Events at the bottom
+kubectl describe pod -n hansacore -l app=keycloak
 ```
+
+### Troubleshooting (lessons learned on SIT)
+
+| Symptom | Cause / fix |
+| :--- | :--- |
+| Traefik answers `no available server` | The route exists but the Service has no ready endpoint, i.e. the pod is not Ready. Check `kubectl get pods` and the pod's events. |
+| Keycloak, API or gateway restart in a loop on first boot | The liveness probe killed a slow start. Keep the `startupProbe` (base manifests). A wrong probe **path or port** looks the same: check `kubectl describe pod` for `Startup probe failed`, and that the probe matches the service (API `8081`, gateway `8080`, `/actuator/health`; Keycloak `8080`, `/health/ready`). |
+| `portal-gateway` crashes with `ReactiveOAuth2ClientConfiguration ... Constructor threw exception` | It could not fetch the OIDC configuration from `KEYCLOAK_ISSUER_URI` at startup. Keycloak is not ready yet, or the public DNS/TLS for the auth host is wrong. It restarts until Keycloak is up; that is expected on a cold boot. |
+| A new image is built but nothing changes | The tag is always `:local`, so `kubectl apply` sees no diff. Run `kubectl rollout restart deploy/<name> -n hansacore`. |
+| cert-manager challenge fails with `Invalid value for ... _acme-challenge` | The ClusterIssuer needs `cnameStrategy: Follow` (the ACME names are CNAMEs into the delegated zone) and `hostedZoneName` (the service account cannot list zones). Delete the failed `CertificateRequest` to retry with new settings. |
+| Keycloak admin console stuck on "Loading the Admin UI" | Traefik's `frameDeny` sent `X-Frame-Options: DENY`, which blocks the console's own same-origin iframe. The middleware uses `customFrameOptionsValue: SAMEORIGIN`. |
+| Admin console shows a BasicAuth popup that keeps reappearing | BasicAuth and the console's `Authorization: Bearer` API calls (`/admin/realms/...`) use the same header and cannot share a path. SIT removes the BasicAuth in `overlays/gcp/kustomization.yaml`; DEV still has it, so the DEV admin console has this problem. |
+| Postgres comes back empty after a VM restart | The data disk was not mounted (`nofail`) and Postgres started on the boot disk. Check `findmnt /mnt/disks/postgres-data`, fix the mount, then restart the postgres pod. |
 
 ### Changing hostnames on a running cluster
 The realm import only runs on an empty Keycloak database, so after changing
@@ -396,6 +518,25 @@ and delete Ingress objects that no longer exist in `k8s/base` —
 `kubectl apply -k` does not remove them.
 
 ### Security notes
-Still outstanding: git history scrubbing (and rotation) for the secrets that
-were previously committed, and GCP-specific hardening like cert-manager.
-The `hansacore-api` image no longer contains dev credentials (§2).
+The `hansacore-api` image no longer contains dev credentials (§2), and TLS on
+SIT comes from cert-manager with a service account that can edit only the ACME
+DNS zone.
+
+Still outstanding:
+- Git history scrubbing (and rotation) for the secrets that were previously committed.
+- **SIT: the Keycloak admin console is reachable from the internet**, protected
+  only by the admin password (turn on brute-force detection in the `master`
+  realm). Before a production environment exists, move it to a private route
+  (separate admin hostname behind an IAP tunnel or VPN).
+- The fine-grained GitHub token on the SIT VM expires; renew it before then.
+
+### Not done yet (SIT)
+- **Backups**: no Postgres dump/restore job. SIT holds demo data only; needed
+  before anything worth keeping lives there.
+- **CI/CD**: deployments are manual (§5). Planned: GitHub Actions with
+  Workload Identity Federation and a narrow CI service account, pushing
+  images to the Artifact Registry repo (`hansacore-images`, one shared repo
+  for all environments).
+- **Startup ordering**: all pods start at once; Keycloak's dependents restart
+  a few times on a cold boot. Init containers waiting for Keycloak/Postgres
+  are an option if this gets noisy.
