@@ -92,8 +92,10 @@ patches:
           hostPath:
             path: /mnt/disks/postgres-data
             type: DirectoryOrCreate
-  - target:
+  - patch: |-
+      apiVersion: v1
       kind: PersistentVolumeClaim
-      name: postgres-pvc
-    patch: |-
+      metadata:
+        name: postgres-pvc
+        namespace: hansacore
       $patch: delete
