@@ -10,6 +10,7 @@ spec:
       name: letsencrypt-staging-account-key
     solvers:
       - dns01:
+          cnameStrategy: Follow
           cloudDNS:
             project: hansacore
             hostedZoneName: hansacore-sit-acme-zone
