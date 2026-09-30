@@ -62,7 +62,7 @@ spec:
               memory: 1536Mi
           startupProbe:
             httpGet:
-              path: /health/ready
+              path: /actuator/health
               port: 8081
             periodSeconds: 10
             failureThreshold: 30
