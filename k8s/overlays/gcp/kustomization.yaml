@@ -101,3 +101,13 @@ patches:
         name: postgres-pvc
         namespace: hansacore
       $patch: delete
+  # BasicAuth on /admin conflicts with the admin console's own
+  # "Authorization: Bearer" calls to /admin/realms/*, so drop the
+  # admin-basic-auth middleware on SIT (see the Keycloak admin discussion).
+  - target:
+      kind: Ingress
+      name: hansacore-ingress-admin
+    patch: |-
+      - op: replace
+        path: /metadata/annotations/traefik.ingress.kubernetes.io~1router.middlewares
+        value: hansacore-redirect-https@kubernetescrd,hansacore-security-headers@kubernetescrd
