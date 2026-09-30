@@ -34,4 +34,4 @@ spec:
     forceSTSHeader: true
     contentTypeNosniff: true
     browserXssFilter: true
-    frameDeny: true
+    customFrameOptionsValue: "SAMEORIGIN"
