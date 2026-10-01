@@ -1,0 +1,38 @@
+# Patches shared by every environment that runs on a single GCP VM
+# (overlays/gcp = SIT, overlays/uat). The VM is prepared by
+# scripts/bootstrap-vm.sh, which mounts the pd-ssd data disk at
+# /mnt/disks/postgres-data.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+patches:
+  # Postgres data on the dedicated pd-ssd instead of k3s' local-path
+  # storage on the boot disk.
+  - target:
+      kind: Deployment
+      name: postgres
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/volumes/0
+        value:
+          name: postgres-storage
+          hostPath:
+            path: /mnt/disks/postgres-data
+            type: DirectoryOrCreate
+  - patch: |-
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: postgres-pvc
+        namespace: hansacore
+      $patch: delete
+  # BasicAuth on /admin conflicts with the admin console's own
+  # "Authorization: Bearer" calls to /admin/realms/*, so drop the
+  # admin-basic-auth middleware (README §6, troubleshooting).
+  - target:
+      kind: Ingress
+      name: hansacore-ingress-admin
+    patch: |-
+      - op: replace
+        path: /metadata/annotations/traefik.ingress.kubernetes.io~1router.middlewares
+        value: hansacore-redirect-https@kubernetescrd,hansacore-security-headers@kubernetescrd

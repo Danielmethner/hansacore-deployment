@@ -24,6 +24,15 @@ k8s/overlays/*/secrets/*.htpasswd
 # generated (scripts/render-realm.sh). Never commit this.
 k8s/overlays/*/02a-keycloak-realm-cm.generated.yaml
 
+# Terraform: provider cache and local state (state lives in gs://hansacore-tfstate).
+# .terraform.lock.hcl IS committed.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+
 # IDE & OS
 .DS_Store
 Thumbs.db

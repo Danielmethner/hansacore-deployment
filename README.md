@@ -2,9 +2,10 @@
 
 Infrastructure-as-Code and Kubernetes manifests for deploying the **HansaCore** platform on a single-node **k3s Kubernetes cluster**.
 
-The same base manifests run in two places; each has its own Kustomize overlay:
+The same base manifests run in three places; each has its own Kustomize overlay:
 1. **DEV (`overlays/local-vm`)**: an Ubuntu 24.04 VM via **Canonical Multipass** on Windows 11 Hyper-V (§3).
-2. **SIT (`overlays/gcp`)**: a single **Google Cloud Compute Engine VM** (`hansacore-sit-vm`, europe-west6) running k3s, with public DNS and Let's Encrypt certificates (§5).
+2. **SIT (`overlays/gcp`)**: a single **Google Cloud Compute Engine VM** (`hansacore-sit-vm`, europe-west6) running k3s, with public DNS and Let's Encrypt certificates; built by hand (§5).
+3. **UAT (`overlays/uat`)**: the same shape as SIT in its own project `hansacore-uat`, provisioned with **Terraform** (`infra/`) and `scripts/bootstrap-vm.sh` (§7).
 
 Deploying a change is `git pull`, optionally rebuild images, then `kubectl apply -k <overlay>`; see §5 ("Deploying changes") for the exact routine.
 
@@ -19,7 +20,7 @@ Pattern: `<env>.<app>.hansacore.com`; production has no environment label.
 | Environment | Portal | ERP (`hansacore-web`) | Keycloak |
 | :--- | :--- | :--- | :--- |
 | PROD | `hansacore.com` | `erp.hansacore.com` | `auth.hansacore.com` |
-| UAT | `uat.hansacore.com` | `uat.erp.hansacore.com` | `uat.auth.hansacore.com` |
+| UAT (GCP, `overlays/uat`) | `uat.hansacore.com` | `uat.erp.hansacore.com` | `uat.auth.hansacore.com` |
 | SIT (GCP, `overlays/gcp`) | `sit.hansacore.com` | `sit.erp.hansacore.com` | `sit.auth.hansacore.com` |
 | DEV (Multipass, `overlays/local-vm`) | `dev.hansacore.com` | `dev.erp.hansacore.com` | `dev.auth.hansacore.com` |
 
@@ -113,22 +114,30 @@ hansacore-deployment/
 │   │   ├── 10-ingress-http-redirect.yaml
 │   │   └── 11-portal-placeholder.yaml  # stand-in portal page (nginx + ConfigMap)
 │   ├── components/
-│   │   └── demo-data/                  # demo tenants/users for the API (both overlays)
-│   │       ├── kustomization.yaml          # ConfigMap generator + api mount/import
-│   │       └── demo-data.yml               # git-ignored (real names/emails)
+│   │   ├── demo-data/                  # demo tenants/users for the API (all overlays)
+│   │   │   ├── kustomization.yaml          # ConfigMap generator + api mount/import
+│   │   │   └── demo-data.yml               # git-ignored (real names/emails)
+│   │   └── gcp-vm/                     # shared by gcp + uat: Postgres hostPath on the
+│   │                                   # data disk, admin Ingress without BasicAuth
 │   └── overlays/
 │       ├── local-vm/                   # DEV: Multipass VM target
 │       │   ├── kustomization.yaml          # Ingress host patches, api profile `dev`
 │       │   ├── dev-ca-trust.patch.yaml     # DEV-only CA truststore for api + gateway
 │       │   ├── hansacore-env.properties    # this env's hostnames / issuer / CORS
 │       │   └── secrets/*.env.example       # templates; real .env files are git-ignored
-│       └── gcp/                        # SIT: GCP VM target
-│           ├── kustomization.yaml          # host patches, api profile `sit`, Postgres
-│           │                               # hostPath, admin Ingress without BasicAuth
-│           ├── 04-cert-issuers.yaml        # cert-manager ClusterIssuers (LE staging + prod)
-│           ├── 05-certificate.yaml         # one Certificate, 3 SANs -> Secret hansacore-tls
-│           ├── hansacore-env.properties    # SIT hostnames / issuer / CORS
-│           └── secrets/*.env.example       # templates; no custom truststore
+│       ├── gcp/                        # SIT: GCP VM target (project hansacore)
+│       │   ├── kustomization.yaml          # host patches, api profile `sit`, gcp-vm component
+│       │   ├── 04-cert-issuers.yaml        # cert-manager ClusterIssuers (LE staging + prod)
+│       │   ├── 05-certificate.yaml         # one Certificate, 3 SANs -> Secret hansacore-tls
+│       │   ├── hansacore-env.properties    # SIT hostnames / issuer / CORS
+│       │   └── secrets/*.env.example       # templates; no custom truststore
+│       └── uat/                        # UAT: GCP VM target (project hansacore-uat),
+│                                       # same files as gcp/, api profile `uat`
+├── infra/                               # Terraform (§7)
+│   ├── modules/environment/            # one GCP environment: VPC, firewall, IP, VM,
+│   │                                   # data disk, service account, IAM, DNS
+│   ├── projects/uat/                   # long-lived: project, APIs, budget
+│   └── envs/uat/                       # disposable: calls modules/environment
 ├── identity/
 │   └── portal-realm.template.json      # Keycloak realm export, WITH PLACEHOLDERS
 │                                        # (__ERP_BASE_URL__, __PORTAL_BASE_URL__,
@@ -136,7 +145,8 @@ hansacore-deployment/
 ├── scripts/
 │   ├── bootstrap-secrets.sh            # generates git-ignored secret files per overlay
 │   ├── render-realm.sh                 # renders the realm template -> per-overlay ConfigMap
-│   ├── build-images.sh                 # builds the :local images on the VM (DEV and SIT)
+│   ├── build-images.sh                 # builds the :local images on the VM (all envs)
+│   ├── bootstrap-vm.sh                 # GCP VM: Docker, k3s, data disk, repos, cert-manager
 │   └── rebuild-local-db.ps1            # DEV: drops the hansacore schema and re-seeds
 ├── ssl/                                 # TLS Certificate & Java Truststore automation
 │   └── generate-certs.sh               # DEV only; reuses the CA, certs for the dev.* hosts
@@ -291,12 +301,15 @@ Azure AD strictly enforces that all non-localhost redirect URIs must begin with 
    ```text
    https://dev.auth.hansacore.com/realms/portal/broker/microsoft/endpoint
    https://sit.auth.hansacore.com/realms/portal/broker/microsoft/endpoint
+   https://uat.auth.hansacore.com/realms/portal/broker/microsoft/endpoint
    ```
    The DEV name does not need to be publicly resolvable — the redirect happens in the browser.
 
 ### Entra Client Secret
 Under **Certificates & secrets** → **New client secret**, create a secret and copy its
-**Value** (not the Secret ID) into the overlay's git-ignored secrets file:
+**Value** (not the Secret ID) into the overlay's git-ignored secrets file. Use a
+**separate secret per environment** (description e.g. `hansacore-uat`), so one
+environment's secret can be revoked without breaking the others:
 ```text
 k8s/overlays/<env>/secrets/keycloak-clients.env  →  MICROSOFT_CLIENT_SECRET=<value>
 ```
@@ -319,13 +332,17 @@ SIT is a single Compute Engine VM running k3s, deployed **manually** from the
 VM itself (no CI/CD yet). `k8s/overlays/gcp` carries its hostnames
 (`sit.hansacore.com`, `sit.erp.hansacore.com`, `sit.auth.hansacore.com`).
 
+UAT has the same shape (§7). The deploy and stop/start routines below apply
+to it unchanged, with `hansacore-uat-vm`, `--project=hansacore-uat` and the
+overlay `uat` instead of `gcp`.
+
 ### How it is set up
 
 | Piece | Setup |
 | :--- | :--- |
 | VM | `hansacore-sit-vm`, `e2-standard-2`, zone `europe-west6-a` (Zurich), Ubuntu, Docker + k3s |
 | Network | Own VPC, static external IP; firewall allows only 80/443 from the internet, SSH only via **IAP** |
-| Storage | Separate pd-ssd data disk (`auto-delete=no`) mounted at `/mnt/disks/postgres-data` (fstab, by UUID, `nofail`); Postgres uses it via a `hostPath` patch in the gcp overlay |
+| Storage | Separate pd-ssd data disk (`auto-delete=no`) mounted at `/mnt/disks/postgres-data` (fstab, by UUID, `nofail`); Postgres uses it via a `hostPath` patch (`k8s/components/gcp-vm`) |
 | Repos | The four repos are cloned side by side under `~/hansacore/` (`hansacore-api`, `hansacore-web`, `hansacore-portal`, `hansacore-deployment`); read-only fine-grained GitHub token |
 | Images | Built on the VM (`scripts/build-images.sh`) and imported into k3s' containerd as `:local`; nothing is pushed to a registry yet |
 | DNS | The three SIT names point at the static IP. ACME challenges are delegated (CNAME) into a dedicated Cloud DNS zone (`hansacore-sit-acme-zone`) |
@@ -507,7 +524,8 @@ kubectl describe pod -n hansacore -l app=keycloak
 | A new image is built but nothing changes | The tag is always `:local`, so `kubectl apply` sees no diff. Run `kubectl rollout restart deploy/<name> -n hansacore`. |
 | cert-manager challenge fails with `Invalid value for ... _acme-challenge` | The ClusterIssuer needs `cnameStrategy: Follow` (the ACME names are CNAMEs into the delegated zone) and `hostedZoneName` (the service account cannot list zones). Delete the failed `CertificateRequest` to retry with new settings. |
 | Keycloak admin console stuck on "Loading the Admin UI" | Traefik's `frameDeny` sent `X-Frame-Options: DENY`, which blocks the console's own same-origin iframe. The middleware uses `customFrameOptionsValue: SAMEORIGIN`. |
-| Admin console shows a BasicAuth popup that keeps reappearing | BasicAuth and the console's `Authorization: Bearer` API calls (`/admin/realms/...`) use the same header and cannot share a path. SIT removes the BasicAuth in `overlays/gcp/kustomization.yaml`; DEV still has it, so the DEV admin console has this problem. |
+| Keycloak gets OOMKilled (exit code 137) during startup | Keycloak 24's Quarkus augmentation and realm import require at least 1024Mi memory request and 2048Mi limit (configured in `k8s/base/02-keycloak.yaml`). |
+| Pods restart 1-5 times on a cold boot | On a 2-vCPU machine, CPU contention during initial JVM startup and realm import can cause startup probe delays or transient dependency timeouts (e.g. `portal-gateway` waiting for Keycloak to serve discovery metadata). This is normal; pods recover automatically once upstream services report ready. |
 | Postgres comes back empty after a VM restart | The data disk was not mounted (`nofail`) and Postgres started on the boot disk. Check `findmnt /mnt/disks/postgres-data`, fix the mount, then restart the postgres pod. |
 
 ### Changing hostnames on a running cluster
@@ -524,15 +542,18 @@ DNS zone.
 
 Still outstanding:
 - Git history scrubbing (and rotation) for the secrets that were previously committed.
-- **SIT: the Keycloak admin console is reachable from the internet**, protected
+- **SIT and UAT: the Keycloak admin console is reachable from the internet**, protected
   only by the admin password (turn on brute-force detection in the `master`
   realm). Before a production environment exists, move it to a private route
   (separate admin hostname behind an IAP tunnel or VPN).
-- The fine-grained GitHub token on the SIT VM expires; renew it before then.
+- The fine-grained GitHub token on the SIT and UAT VMs expires; renew it before then.
 
-### Not done yet (SIT)
-- **Backups**: no Postgres dump/restore job. SIT holds demo data only; needed
-  before anything worth keeping lives there.
+### Not done yet (SIT, UAT)
+- **Backups**: no Postgres dump/restore job. SIT and UAT hold demo data only;
+  needed before anything worth keeping lives there.
+- **SIT in its own project**: SIT still runs in the shared project
+  `hansacore` and was built by hand. Rebuild it with `infra/modules/environment`
+  in a `hansacore-sit` project, and rename `overlays/gcp` to `overlays/sit`.
 - **CI/CD**: deployments are manual (§5). Planned: GitHub Actions with
   Workload Identity Federation and a narrow CI service account, pushing
   images to the Artifact Registry repo (`hansacore-images`, one shared repo
@@ -540,3 +561,239 @@ Still outstanding:
 - **Startup ordering**: all pods start at once; Keycloak's dependents restart
   a few times on a cold boot. Init containers waiting for Keycloak/Postgres
   are an option if this gets noisy.
+
+---
+
+## 7. Infrastructure (Terraform) and UAT
+
+### Resource hierarchy
+
+One project per environment, under an Organization on `hansacore.com`
+(Cloud Identity Free). Resources every environment uses live in the shared
+project `hansacore`.
+
+```mermaid
+flowchart TD
+    org["Organization hansacore.com"]
+    shared["folder shared"]
+    nonprod["folder nonprod"]
+    prod["folder prod"]
+    hub["project hansacore: hansacore-zone, ACME zones, hansacore-images, tfstate bucket, SIT VM (for now)"]
+    uat["project hansacore-uat: VPC, firewall, IP, VM, data disk, VM service account"]
+    org --> shared --> hub
+    org --> nonprod --> uat
+    org --> prod
+    uat -->|"dns.admin on its ACME zone, artifactregistry.reader"| hub
+```
+
+### Layout and state
+
+| Directory | What | Lifetime |
+| :--- | :--- | :--- |
+| `infra/modules/environment/` | One environment: VPC + subnet, firewall (80/443, SSH from IAP only), static IP, pd-ssd data disk, VM (OS Login, shielded), VM service account and its IAM, A records, ACME zone + NS delegation + `_acme-challenge` CNAMEs | reused per env |
+| `infra/projects/uat/` | Project `hansacore-uat` in folder `nonprod`, APIs, monthly budget (50/90/100%), optional external-IP org policy override | long-lived (`deletion_policy = PREVENT`) |
+| `infra/envs/uat/` | Calls the module with the UAT values | disposable: `terraform destroy` removes the environment, the project stays |
+
+The two UAT layers are separate because a deleted project ID stays reserved
+for 30 days, so destroying and recreating the environment must not touch the
+project.
+
+State lives in `gs://hansacore-tfstate` (versioned), one prefix per root
+(`projects/uat`, `envs/uat`); never on a laptop or in Git.
+`.terraform.lock.hcl` is committed so every run uses the same provider version.
+
+Everyday commands, run from the root directory (`infra/projects/uat` or `infra/envs/uat`):
+
+```powershell
+terraform init                 # once per checkout; downloads the provider, connects the state bucket
+terraform fmt -recursive ..\.. # formatting
+terraform validate
+terraform plan -out=tfplan     # READ this: what will be created, changed, destroyed
+terraform apply tfplan
+terraform output               # e.g. external_ip, ssh_command
+terraform destroy              # envs/uat only
+```
+
+### Runbook: first-time UAT setup
+
+All commands run in PowerShell on your machine unless stated otherwise.
+
+**1. Organization (Cloud Identity Free)**
+
+1. In the Cloud console, go to **IAM & Admin → Identity & Organization**. The console now guides you to the **Google Cloud setup checklist**.
+2. Click **Go to checklist** (or **Choose an option** under "Support your workloads") and select an option like **Proof of concept** or **Production**.
+3. Follow the **Organisation resource** step in the checklist:
+   - When prompted, sign up with your domain `hansacore.com` and create the super admin `gcp-admin@hansacore.com` (this provisions Cloud Identity Free behind the scenes).
+   - Verify the domain with the TXT value the wizard shows. If `hansacore.com` already has a TXT record (e.g. SPF) in the `hansacore` project, add the new verification string to the existing TXT record via the Cloud Console, or use `gcloud`. Example for creating a new record:
+     ```powershell
+     gcloud dns record-sets create hansacore.com. --zone=hansacore-zone --project=hansacore --type=TXT --ttl=300 --rrdatas='"google-site-verification=VALUE"'
+     ```
+   - Once verified, sign in to the Google Cloud console as `gcp-admin@hansacore.com` and accept the agreement. This creates the Organization.
+4. Complete the initial IAM setup. Authenticate as the new super admin:
+   ```powershell
+   gcloud auth login gcp-admin@hansacore.com
+   gcloud organizations list                     # note ORG_ID
+   ```
+   Grant the required roles to the super admin so Terraform can build the infrastructure:
+   ```powershell
+   gcloud organizations add-iam-policy-binding ORG_ID --member=user:gcp-admin@hansacore.com --role=roles/resourcemanager.organizationAdmin
+   gcloud organizations add-iam-policy-binding ORG_ID --member=user:gcp-admin@hansacore.com --role=roles/resourcemanager.folderAdmin
+   gcloud organizations add-iam-policy-binding ORG_ID --member=user:gcp-admin@hansacore.com --role=roles/resourcemanager.projectCreator
+   gcloud organizations add-iam-policy-binding ORG_ID --member=user:gcp-admin@hansacore.com --role=roles/orgpolicy.policyAdmin
+   ```
+   *(If a binding fails with permission denied, add it manually on the organization's **IAM** page in the console as the super admin.)*
+5. **Billing**: The billing account likely still belongs to your personal Gmail account. Grant the new admin access to it (budgets need Billing Account Administrator):
+   ```powershell
+   gcloud billing accounts list --account=danielmethnerek@gmail.com          # note BILLING_ID
+   gcloud billing accounts add-iam-policy-binding BILLING_ID --member=user:gcp-admin@hansacore.com --role=roles/billing.admin --account=danielmethnerek@gmail.com
+   ```
+6. Check the enforced org policies:
+   ```powershell
+   gcloud org-policies list --organization=ORG_ID
+   ```
+   - `iam.allowedPolicyMemberDomains`: new IAM grants to non-`hansacore.com`
+     accounts (your Gmail) might be blocked. Work as `gcp-admin@hansacore.com` from now on.
+   - `compute.vmExternalIpAccess`: if listed, set `allow_vm_external_ip = true`
+     in `infra/projects/uat/terraform.tfvars`, otherwise the VM can't get its public IP.
+   - `compute.requireOsLogin`: UAT uses OS Login anyway.
+7. Folders:
+   ```powershell
+   gcloud resource-manager folders create --display-name=shared  --organization=ORG_ID
+   gcloud resource-manager folders create --display-name=nonprod --organization=ORG_ID
+   gcloud resource-manager folders create --display-name=prod    --organization=ORG_ID
+   gcloud resource-manager folders list --organization=ORG_ID    # note the IDs
+   ```
+8. Move the existing project into `shared`. It still belongs to your Gmail
+   account, so first grant the domain admin the Project Mover and Project IAM Admin roles (assigning Owner fails via CLI due to SOLO_MUST_INVITE_OWNERS). This is done as the Gmail account, and then the move is performed as the new domain admin:
+   ```powershell
+   gcloud projects add-iam-policy-binding hansacore --member=user:gcp-admin@hansacore.com --role=roles/resourcemanager.projectMover --account=danielmethnerek@gmail.com
+   gcloud projects add-iam-policy-binding hansacore --member=user:gcp-admin@hansacore.com --role=roles/resourcemanager.projectIamAdmin --account=danielmethnerek@gmail.com
+   gcloud beta projects move hansacore --folder=SHARED_FOLDER_ID
+   ```
+   From this moment the org policies apply to SIT. Start the SIT VM and run
+   the checks from §5 (pods, both `curl`s, a browser login).
+
+**2. DNS pre-check**
+
+```powershell
+gcloud dns record-sets list --zone=hansacore-zone --project=hansacore --filter="name~uat"
+```
+
+Leftover `uat.*` records (e.g. from DigitalOcean) make `terraform apply` fail;
+delete them, e.g.
+`gcloud dns record-sets delete uat.hansacore.com. --type=A --zone=hansacore-zone --project=hansacore`.
+Terraform creates `_acme-challenge.<host>` → `<label>.acme-uat.hansacore.com.`
+(e.g. `uat-erp`); SIT's hand-made CNAMEs may use other targets, which doesn't
+matter, as long as the target is inside the environment's ACME zone.
+
+**3. Terraform foundations**
+
+```powershell
+winget install Hashicorp.Terraform       # new terminal afterwards; check: terraform -version
+gcloud auth application-default login    # as gcp-admin@hansacore.com
+gcloud auth application-default set-quota-project hansacore
+gcloud services enable billingbudgets.googleapis.com cloudbilling.googleapis.com cloudresourcemanager.googleapis.com orgpolicy.googleapis.com --project=hansacore
+gcloud storage buckets create gs://hansacore-tfstate --project=hansacore --location=europe-west6 --uniform-bucket-level-access --public-access-prevention
+gcloud storage buckets update gs://hansacore-tfstate --versioning
+```
+
+Bucket names are global. If `hansacore-tfstate` is taken, pick another and
+change `bucket` in both `versions.tf` backend blocks. The same applies to the
+project ID `hansacore-uat` (`project_id` in both roots).
+
+**4. Terraform apply**
+
+1. Fill `folder_id` (nonprod) and `billing_account` in
+   `infra/projects/uat/terraform.tfvars`, then:
+   ```powershell
+   cd infra\projects\uat
+   terraform init; terraform validate; terraform plan -out=tfplan
+   terraform apply tfplan
+   ```
+2. The environment:
+   ```powershell
+   cd ..\..\envs\uat
+   terraform init; terraform validate; terraform plan -out=tfplan
+   terraform apply tfplan
+   terraform output
+   ```
+3. Commit both `.terraform.lock.hcl` files and the filled `terraform.tfvars`.
+4. Check: `nslookup uat.auth.hansacore.com` returns `external_ip`, and
+   `nslookup -type=NS acme-uat.hansacore.com` returns Google name servers.
+
+**5. Bootstrap the VM**
+
+The repos aren't on the new VM yet, so copy the script over (from the
+`hansacore-deployment` directory):
+
+```powershell
+gcloud compute scp scripts/bootstrap-vm.sh hansacore-uat-vm:/home/gcp_admin_hansacore_com/bootstrap-vm.sh --project=hansacore-uat --zone=europe-west6-a --tunnel-through-iap
+gcloud compute ssh hansacore-uat-vm --project=hansacore-uat --zone=europe-west6-a --tunnel-through-iap
+```
+
+On the VM:
+
+```bash
+sed -i 's/\r$//' ~/bootstrap-vm.sh   # in case the copy has Windows line endings
+bash ~/bootstrap-vm.sh               # asks for GitHub username + token on the first clone
+source ~/.bashrc
+```
+
+With OS Login your VM username is derived from your account email
+(`gcp_admin_hansacore_com`, underscores replacing hyphens and dots), so the home directory is `/home/gcp_admin_hansacore_com`.
+*(Note: in PowerShell on Windows, pass the explicit remote path `/home/gcp_admin_hansacore_com/...` to `gcloud compute scp`, as `~` may be interpreted literally).*
+
+**6. Entra**
+
+Add the UAT redirect URI and create a UAT-only client secret (§4).
+
+**7. Deploy**
+
+Push the `hansacore-api` commit with `application-uat.properties` first
+(the API image must contain the `uat` profile). Then from Windows, copy the
+git-ignored demo data:
+
+```powershell
+gcloud compute scp k8s/components/demo-data/demo-data.yml hansacore-uat-vm:/home/gcp_admin_hansacore_com/hansacore/hansacore-deployment/k8s/components/demo-data/demo-data.yml --project=hansacore-uat --zone=europe-west6-a --tunnel-through-iap
+```
+
+On the VM:
+
+```bash
+cd ~/hansacore/hansacore-deployment
+scripts/bootstrap-secrets.sh uat
+nano k8s/overlays/uat/secrets/keycloak-clients.env   # MICROSOFT_CLIENT_SECRET=<UAT secret value>
+scripts/render-realm.sh uat
+bash scripts/build-images.sh
+kubectl apply -k k8s/overlays/uat
+kubectl get pods -n hansacore -w                     # 5-10 minutes on a cold start
+```
+
+Verify as for SIT: `kubectl get certificate -n hansacore` shows `READY True`,
+both `curl` checks from §5 (with `uat.*`), a browser login including
+Microsoft, the admin console loads (turn on brute-force detection in the
+`master` realm), and a VM stop/start.
+
+**8. Prove repeatability**
+
+```powershell
+cd infra\envs\uat
+terraform destroy          # VM, disks, IP, DNS records, ACME zone; the project stays
+terraform apply            # new VM and IP; Terraform updates the A records
+```
+
+Then repeat steps 5 and 7, and time the whole run. Keep the UAT Entra
+secret in your password manager so step 7 doesn't need a new one. Notes:
+- The new VM has a new SSH host key, so PuTTY warns once; that is expected.
+- Let's Encrypt production allows only **5 certificates per week for the
+  same set of names**. For repeated destroy/recreate tests, point
+  `05-certificate.yaml` at `letsencrypt-staging` first.
+- For a long idle period, `terraform destroy` costs nothing; stopping the VM
+  still costs the disks and the static IP.
+
+### Adding another environment (e.g. PROD)
+
+Copy `infra/projects/uat` and `infra/envs/uat` (change `project_id`,
+`folder_id`, `env`, `subnet_cidr`, `hostnames`, the backend `prefix`, and
+`vm_name`), copy `k8s/overlays/uat` with the new hostnames, and add
+`application-<env>.properties` in `hansacore-api`.
