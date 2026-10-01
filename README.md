@@ -4,8 +4,8 @@ Infrastructure-as-Code and Kubernetes manifests for deploying the **HansaCore** 
 
 The same base manifests run in three places; each has its own Kustomize overlay:
 1. **DEV (`overlays/local-vm`)**: an Ubuntu 24.04 VM via **Canonical Multipass** on Windows 11 Hyper-V (§3).
-2. **SIT (`overlays/gcp`)**: a single **Google Cloud Compute Engine VM** (`hansacore-sit-vm`, europe-west6) running k3s, with public DNS and Let's Encrypt certificates; built by hand (§5).
-3. **UAT (`overlays/uat`)**: the same shape as SIT in its own project `hansacore-uat`, provisioned with **Terraform** (`infra/`) and `scripts/bootstrap-vm.sh` (§7).
+2. **SIT (`overlays/sit`)**: a single **Google Cloud Compute Engine VM** (`hansacore-sit-vm`, europe-west6) running k3s in its own project `hansacore-sit`, provisioned with **Terraform** (`infra/`) and `scripts/bootstrap-vm.sh` (§5, §7).
+3. **UAT (`overlays/uat`)**: the same shape as SIT in its own project `hansacore-uat`, provisioned with **Terraform** (`infra/`) and `scripts/bootstrap-vm.sh` (§5, §7).
 
 Deploying a change is `git pull`, optionally rebuild images, then `kubectl apply -k <overlay>`; see §5 ("Deploying changes") for the exact routine.
 
@@ -21,7 +21,7 @@ Pattern: `<env>.<app>.hansacore.com`; production has no environment label.
 | :--- | :--- | :--- | :--- |
 | PROD | `hansacore.com` | `erp.hansacore.com` | `auth.hansacore.com` |
 | UAT (GCP, `overlays/uat`) | `uat.hansacore.com` | `uat.erp.hansacore.com` | `uat.auth.hansacore.com` |
-| SIT (GCP, `overlays/gcp`) | `sit.hansacore.com` | `sit.erp.hansacore.com` | `sit.auth.hansacore.com` |
+| SIT (GCP, `overlays/sit`) | `sit.hansacore.com` | `sit.erp.hansacore.com` | `sit.auth.hansacore.com` |
 | DEV (Multipass, `overlays/local-vm`) | `dev.hansacore.com` | `dev.erp.hansacore.com` | `dev.auth.hansacore.com` |
 
 One login for all app hosts: each app host has its own host-only gateway
@@ -117,7 +117,7 @@ hansacore-deployment/
 │   │   ├── demo-data/                  # demo tenants/users for the API (all overlays)
 │   │   │   ├── kustomization.yaml          # ConfigMap generator + api mount/import
 │   │   │   └── demo-data.yml               # git-ignored (real names/emails)
-│   │   └── gcp-vm/                     # shared by gcp + uat: Postgres hostPath on the
+│   │   └── gcp-vm/                     # shared by sit + uat: Postgres hostPath on the
 │   │                                   # data disk, admin Ingress without BasicAuth
 │   └── overlays/
 │       ├── local-vm/                   # DEV: Multipass VM target
@@ -125,19 +125,21 @@ hansacore-deployment/
 │       │   ├── dev-ca-trust.patch.yaml     # DEV-only CA truststore for api + gateway
 │       │   ├── hansacore-env.properties    # this env's hostnames / issuer / CORS
 │       │   └── secrets/*.env.example       # templates; real .env files are git-ignored
-│       ├── gcp/                        # SIT: GCP VM target (project hansacore)
+│       ├── sit/                        # SIT: GCP VM target (project hansacore-sit)
 │       │   ├── kustomization.yaml          # host patches, api profile `sit`, gcp-vm component
 │       │   ├── 04-cert-issuers.yaml        # cert-manager ClusterIssuers (LE staging + prod)
 │       │   ├── 05-certificate.yaml         # one Certificate, 3 SANs -> Secret hansacore-tls
 │       │   ├── hansacore-env.properties    # SIT hostnames / issuer / CORS
 │       │   └── secrets/*.env.example       # templates; no custom truststore
 │       └── uat/                        # UAT: GCP VM target (project hansacore-uat),
-│                                       # same files as gcp/, api profile `uat`
+│                                       # same files as sit/, api profile `uat`
 ├── infra/                               # Terraform (§7)
 │   ├── modules/environment/            # one GCP environment: VPC, firewall, IP, VM,
 │   │                                   # data disk, service account, IAM, DNS
-│   ├── projects/uat/                   # long-lived: project, APIs, budget
-│   └── envs/uat/                       # disposable: calls modules/environment
+│   ├── projects/sit/                   # long-lived: project, APIs, budget (SIT)
+│   ├── envs/sit/                       # disposable: calls modules/environment (SIT)
+│   ├── projects/uat/                   # long-lived: project, APIs, budget (UAT)
+│   └── envs/uat/                       # disposable: calls modules/environment (UAT)
 ├── identity/
 │   └── portal-realm.template.json      # Keycloak realm export, WITH PLACEHOLDERS
 │                                        # (__ERP_BASE_URL__, __PORTAL_BASE_URL__,
@@ -326,54 +328,52 @@ Import-Certificate -FilePath "ssl\ca.crt" -CertStoreLocation "Cert:\CurrentUser\
 
 ---
 
-## 5. GCP (SIT)
+## 5. GCP (SIT and UAT)
 
-SIT is a single Compute Engine VM running k3s, deployed **manually** from the
-VM itself (no CI/CD yet). `k8s/overlays/gcp` carries its hostnames
-(`sit.hansacore.com`, `sit.erp.hansacore.com`, `sit.auth.hansacore.com`).
+SIT and UAT each run on a dedicated Compute Engine VM running k3s, provisioned
+via Terraform (`infra/`). `k8s/overlays/sit` carries SIT hostnames
+(`sit.hansacore.com`, `sit.erp.hansacore.com`, `sit.auth.hansacore.com`), and
+`k8s/overlays/uat` carries UAT hostnames (`uat.*`).
 
-UAT has the same shape (§7). The deploy and stop/start routines below apply
-to it unchanged, with `hansacore-uat-vm`, `--project=hansacore-uat` and the
-overlay `uat` instead of `gcp`.
+The deploy and stop/start routines below apply to both environments; simply swap
+the project name (`hansacore-sit` vs `hansacore-uat`), VM name (`hansacore-sit-vm` vs
+`hansacore-uat-vm`), and overlay (`sit` vs `uat`).
 
 ### How it is set up
 
 | Piece | Setup |
 | :--- | :--- |
-| VM | `hansacore-sit-vm`, `e2-standard-2`, zone `europe-west6-a` (Zurich), Ubuntu, Docker + k3s |
-| Network | Own VPC, static external IP; firewall allows only 80/443 from the internet, SSH only via **IAP** |
+| VM | `hansacore-sit-vm` (in `hansacore-sit`) / `hansacore-uat-vm` (in `hansacore-uat`), `e2-standard-2`, zone `europe-west6-a` (Zurich), Ubuntu, Docker + k3s |
+| Network | Dedicated VPC per project, static external IP; firewall allows only 80/443 from the internet, SSH only via **IAP** |
 | Storage | Separate pd-ssd data disk (`auto-delete=no`) mounted at `/mnt/disks/postgres-data` (fstab, by UUID, `nofail`); Postgres uses it via a `hostPath` patch (`k8s/components/gcp-vm`) |
 | Repos | The four repos are cloned side by side under `~/hansacore/` (`hansacore-api`, `hansacore-web`, `hansacore-portal`, `hansacore-deployment`); read-only fine-grained GitHub token |
 | Images | Built on the VM (`scripts/build-images.sh`) and imported into k3s' containerd as `:local`; nothing is pushed to a registry yet |
-| DNS | The three SIT names point at the static IP. ACME challenges are delegated (CNAME) into a dedicated Cloud DNS zone (`hansacore-sit-acme-zone`) |
+| DNS | Hostnames point at the static IP. ACME challenges are delegated (CNAME) into a dedicated Cloud DNS zone (`hansacore-sit-acme-zone` or `hansacore-uat-acme-zone` in hub project `hansacore`) |
 | TLS | cert-manager + Let's Encrypt (DNS-01). The `ClusterIssuer` uses the VM's service account through the metadata server, so no key files exist |
-| IAM | The VM's service account has `roles/dns.admin` **only on the ACME zone** (never on the main zone) and reader access to the Artifact Registry repo |
+| IAM | The VM's service account has `roles/dns.admin` **only on its ACME zone** in the `hansacore` hub project and reader access to the Artifact Registry repo |
 
 `kubectl` on the VM needs `export KUBECONFIG=~/.kube/config` (k3s' default
 config file is root-only); this is set in `~/.bashrc`.
 
 ### First-time setup
 
-1. Provision the VM, disks, firewall and service account; create the DNS
-   records for all three SIT hostnames.
-2. On the VM: install Docker and k3s, format and mount the data disk,
-   clone the repos under `~/hansacore/`.
-3. `scripts/bootstrap-secrets.sh gcp` (generates a **separate** set of
-   secrets; never reuse the local-vm ones). **Save the printed BasicAuth
+1. Provision the project, VM, disks, firewall, service account, and DNS records
+   via Terraform (§7).
+2. On the VM: run `bootstrap-vm.sh` to configure swap, install Docker and k3s,
+   format and mount the data disk, and clone the repos under `~/hansacore/`.
+3. `scripts/bootstrap-secrets.sh sit` (or `uat`) (generates a **separate** set of
+   secrets; never reuse across environments). **Save the printed BasicAuth
    password.** The Keycloak admin password is in
-   `k8s/overlays/gcp/secrets/keycloak-admin.env`.
+   `k8s/overlays/<env>/secrets/keycloak-admin.env`.
 4. Put the real `MICROSOFT_CLIENT_SECRET` into
-   `secrets/keycloak-clients.env`, then `scripts/render-realm.sh gcp`.
+   `secrets/keycloak-clients.env`, then `scripts/render-realm.sh <env>`.
 5. Copy `demo-data.yml` into `k8s/components/demo-data/` (it is git-ignored;
    e.g. `gcloud compute scp --tunnel-through-iap`), and decide
    `HANSACORE_DEMODATA_ENABLED` before the first start.
-6. Install cert-manager (consider pinning a release instead of `latest`):
-   ```bash
-   kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
-   ```
-7. `bash scripts/build-images.sh` (all three images).
-8. Add the SIT broker redirect URI in Entra (§4).
-9. `kubectl apply -k k8s/overlays/gcp`, then wait: a cold start takes
+6. cert-manager is installed by `bootstrap-vm.sh` (or install manually).
+7. `bash scripts/build-images.sh` (builds and imports api, gateway, and web).
+8. Add the environment broker redirect URI in Entra (§4).
+9. `kubectl apply -k k8s/overlays/<env>`, then wait: a cold start takes
    about 5-10 minutes (see §6).
 
 ### Deploying changes
@@ -385,7 +385,8 @@ change when you **apply the manifests** (and, for code changes, rebuild the imag
 # 1. On your machine: push your changes to GitHub (each repo you touched).
 
 # 2. Open a shell on the VM (SSH goes through IAP):
-gcloud compute ssh hansacore-sit-vm --zone=europe-west6-a --tunnel-through-iap
+gcloud compute ssh hansacore-sit-vm --project=hansacore-sit --zone=europe-west6-a --tunnel-through-iap
+# For UAT: gcloud compute ssh hansacore-uat-vm --project=hansacore-uat --zone=europe-west6-a --tunnel-through-iap
 ```
 
 ```bash
@@ -396,10 +397,10 @@ cd ~/hansacore/hansacore-deployment && git pull      # repeat in the other repos
 bash scripts/build-images.sh api            # or: gateway | web | (no args = all)
 
 # 5. Realm template or hostnames/secrets changed? Re-render the realm ConfigMap:
-scripts/render-realm.sh gcp
+scripts/render-realm.sh sit                 # or: uat
 
 # 6. Apply the manifests (after EVERY pull of hansacore-deployment):
-kubectl apply -k k8s/overlays/gcp
+kubectl apply -k k8s/overlays/sit           # or: uat
 
 # 7. Rebuilt an image? The tag stays `:local`, so apply sees no change.
 #    Restart the affected Deployment to pick up the new image:
@@ -421,14 +422,14 @@ Notes:
 
 ### Stopping and starting the VM
 
-Stopping SIT when it is not in use saves the compute cost (roughly $64 a
-month running); disks and the static IP keep costing a little. Everything
+Stopping SIT or UAT when it is not in use saves compute cost (roughly $64 a
+month running per VM); disks and the static IP keep costing a little. Everything
 (k3s, data disk, pods, certificate) comes back by itself, about 5-6 minutes
 after the VM is up.
 
 ```powershell
-gcloud compute instances stop  hansacore-sit-vm --zone=europe-west6-a
-gcloud compute instances start hansacore-sit-vm --zone=europe-west6-a
+gcloud compute instances stop  hansacore-sit-vm --project=hansacore-sit --zone=europe-west6-a
+gcloud compute instances start hansacore-sit-vm --project=hansacore-sit --zone=europe-west6-a
 ```
 
 Check afterwards that the Postgres data disk is mounted
@@ -441,8 +442,8 @@ empty directory.
 ## 6. Maintenance & Troubleshooting
 
 ### Reset Keycloak Database & Re-import Realm
-If `identity/portal-realm.template.json` is updated (shown for DEV; use `gcp`
-and `k8s/overlays/gcp` for SIT):
+If `identity/portal-realm.template.json` is updated (shown for DEV; use `sit`
+and `k8s/overlays/sit` for SIT, or `uat` and `k8s/overlays/uat` for UAT):
 ```bash
 # 1. Re-render the ConfigMap for your overlay
 scripts/render-realm.sh local-vm
@@ -551,9 +552,6 @@ Still outstanding:
 ### Not done yet (SIT, UAT)
 - **Backups**: no Postgres dump/restore job. SIT and UAT hold demo data only;
   needed before anything worth keeping lives there.
-- **SIT in its own project**: SIT still runs in the shared project
-  `hansacore` and was built by hand. Rebuild it with `infra/modules/environment`
-  in a `hansacore-sit` project, and rename `overlays/gcp` to `overlays/sit`.
 - **CI/CD**: deployments are manual (§5). Planned: GitHub Actions with
   Workload Identity Federation and a narrow CI service account, pushing
   images to the Artifact Registry repo (`hansacore-images`, one shared repo
@@ -564,7 +562,7 @@ Still outstanding:
 
 ---
 
-## 7. Infrastructure (Terraform) and UAT
+## 7. Infrastructure (Terraform) — SIT and UAT
 
 ### Resource hierarchy
 
@@ -578,11 +576,14 @@ flowchart TD
     shared["folder shared"]
     nonprod["folder nonprod"]
     prod["folder prod"]
-    hub["project hansacore: hansacore-zone, ACME zones, hansacore-images, tfstate bucket, SIT VM (for now)"]
+    hub["project hansacore: hansacore-zone, ACME zones, hansacore-images, tfstate bucket"]
+    sit["project hansacore-sit: VPC, firewall, IP, VM, data disk, VM service account"]
     uat["project hansacore-uat: VPC, firewall, IP, VM, data disk, VM service account"]
     org --> shared --> hub
+    org --> nonprod --> sit
     org --> nonprod --> uat
     org --> prod
+    sit -->|"dns.admin on its ACME zone, artifactregistry.reader"| hub
     uat -->|"dns.admin on its ACME zone, artifactregistry.reader"| hub
 ```
 
@@ -591,15 +592,15 @@ flowchart TD
 | Directory | What | Lifetime |
 | :--- | :--- | :--- |
 | `infra/modules/environment/` | One environment: VPC + subnet, firewall (80/443, SSH from IAP only), static IP, pd-ssd data disk, VM (OS Login, shielded), VM service account and its IAM, A records, ACME zone + NS delegation + `_acme-challenge` CNAMEs | reused per env |
-| `infra/projects/uat/` | Project `hansacore-uat` in folder `nonprod`, APIs, monthly budget (50/90/100%), optional external-IP org policy override | long-lived (`deletion_policy = PREVENT`) |
-| `infra/envs/uat/` | Calls the module with the UAT values | disposable: `terraform destroy` removes the environment, the project stays |
+| `infra/projects/sit/`, `infra/projects/uat/` | Dedicated project (`hansacore-sit`, `hansacore-uat`) in folder `nonprod`, APIs, monthly budget (50/90/100%), optional external-IP org policy override | long-lived (`deletion_policy = PREVENT`) |
+| `infra/envs/sit/`, `infra/envs/uat/` | Calls the module with the environment values | disposable: `terraform destroy` removes the environment, the project stays |
 
-The two UAT layers are separate because a deleted project ID stays reserved
-for 30 days, so destroying and recreating the environment must not touch the
+The two layers are separate because a deleted project ID stays reserved
+for 30 days, so destroying and recreating an environment must not touch the
 project.
 
 State lives in `gs://hansacore-tfstate` (versioned), one prefix per root
-(`projects/uat`, `envs/uat`); never on a laptop or in Git.
+(`projects/sit`, `envs/sit`, `projects/uat`, `envs/uat`); never on a laptop or in Git.
 `.terraform.lock.hcl` is committed so every run uses the same provider version.
 
 Everyday commands, run from the root directory (`infra/projects/uat` or `infra/envs/uat`):
