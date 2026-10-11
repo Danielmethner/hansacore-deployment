@@ -5,13 +5,14 @@
 #
 #   scripts/manage-env.sh status <sit|uat|prod>
 #   scripts/manage-env.sh deploy <sit|uat|prod>
-#   scripts/manage-env.sh build <sit|uat|prod> [api|gateway|web]
+#   scripts/manage-env.sh build <sit|uat|prod> [api|gateway|web|keycloak]
 #   scripts/manage-env.sh logs <sit|uat|prod> <api|gateway|web|keycloak|postgres|portal>
 #   scripts/manage-env.sh db-shell <sit|uat|prod>
 #
 # deploy pulls the four repos, builds the :local images, renders the realm,
 # applies the overlay, and restarts the app Deployments (the image tag does
-# not change, so apply alone leaves the old container running).
+# not change, so apply alone leaves the old container running). Keycloak is
+# rebuilt too but only restarted with `build <env> keycloak`.
 set -euo pipefail
 
 SSH_OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=accept-new)
@@ -135,6 +136,7 @@ for target in "$@"; do
     api) restarts+=(deploy/hansacore-api) ;;
     gateway) restarts+=(deploy/portal-gateway) ;;
     web) restarts+=(deploy/hansacore-web) ;;
+    keycloak) restarts+=(deploy/keycloak) ;;
     *) echo "Unknown build target '$target'" >&2; exit 1 ;;
   esac
 done

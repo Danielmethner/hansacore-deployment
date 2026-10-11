@@ -23,7 +23,9 @@ spec:
     spec:
       containers:
         - name: keycloak
-          image: quay.io/keycloak/keycloak:24.0
+          # quay.io/keycloak/keycloak:24.0 plus the HansaCore theme
+          # (identity/Dockerfile, built by scripts/build-images.sh keycloak).
+          image: hansacore-keycloak:local
           imagePullPolicy: IfNotPresent
           # `start` (not `start-dev`): start-dev is explicitly unsupported
           # beyond throwaway local testing (relaxed caching, no production
@@ -32,10 +34,9 @@ spec:
             - "/opt/keycloak/bin/kc.sh"
             - "start"
             - "--import-realm"
-          # NOTE: not using `--optimized` since this runs the stock
-          # quay.io/keycloak/keycloak image (no `kc.sh build` baked in at
-          # image-build time). Add `--optimized` only if you switch to a
-          # custom image that runs `kc.sh build` in its Dockerfile.
+          # NOTE: not using `--optimized`: the image runs `kc.sh build`, but
+          # without the flag Keycloak still re-augments by itself if a
+          # build-time option here ever drifts from identity/Dockerfile.
           envFrom:
             - configMapRef:
                 name: hansacore-env

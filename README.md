@@ -139,13 +139,17 @@ hansacore-deployment/
 │   ├── envs/sit|uat|prod/              # one server each
 │   └── gcp/                            # unused GCP stack (projects, envs, environment module)
 ├── identity/
-│   └── portal-realm.template.json      # Keycloak realm export, WITH PLACEHOLDERS
-│                                        # (__ERP_BASE_URL__, __PORTAL_BASE_URL__,
-│                                        #  __*_CLIENT_SECRET__, ...)
+│   ├── portal-realm.template.json      # Keycloak realm export, WITH PLACEHOLDERS
+│   │                                    # (__ERP_BASE_URL__, __PORTAL_BASE_URL__,
+│   │                                    #  __*_CLIENT_SECRET__, __SMTP_*__, ...)
+│   ├── themes/hansacore/               # HansaCore login + email theme
+│   └── Dockerfile                      # Keycloak 24 + theme -> hansacore-keycloak:local
 ├── scripts/
 │   ├── bootstrap-secrets.sh            # generates git-ignored secret files per overlay
 │   ├── render-realm.sh                 # renders the realm template -> per-overlay ConfigMap
 │   ├── build-images.sh                 # builds the :local images on the VM (all envs)
+│   ├── apply-realm-sso-onboarding.sh   # applies the SSO onboarding realm changes to a running Keycloak
+│   ├── register-customer-directory.sh  # binds an existing customer's directory + domains (e.g. Forty2)
 │   ├── bootstrap-vm.sh                 # old GCP VM bootstrap (data disk, repos, cert-manager)
 │   └── manage-env.sh                   # Hetzner: status, deploy, build, logs, db-shell (§8)
 ├── .gitignore
@@ -240,9 +244,19 @@ then `scripts/render-realm.sh <env>` and `kubectl apply -k k8s/overlays/<env>`.
 
 Azure AD strictly enforces that all non-localhost redirect URIs must begin with `https://`.
 
+### Who owns the Microsoft login
+The platform's Microsoft login is one **app registration** that must live in a
+directory **HansaCore owns**, not in a customer's (Forty2's) directory, or the
+customer's admins control sign-in for everyone. The HansaCore directory holds
+no users of the platform and no Azure subscription, only this registration.
+`docs/sit-sso-rollout.md` §1 creates it. The legacy registration
+(`74741127-2028-4328-a8cf-057363b92b42`, in Forty2's directory) is only the
+fallback while `MICROSOFT_CLIENT_ID` is unset in an overlay's
+`keycloak-clients.env`; remove it once every environment has switched.
+
 ### Azure Portal Configuration
-1. Go to [Microsoft Entra Admin Center](https://entra.microsoft.com/) $\rightarrow$ **App registrations**.
-2. Select Application ID: `74741127-2028-4328-a8cf-057363b92b42`.
+1. Go to [Microsoft Entra Admin Center](https://entra.microsoft.com/) in the HansaCore directory $\rightarrow$ **App registrations**.
+2. Select the HansaCore app registration (its Application ID is `MICROSOFT_CLIENT_ID`).
 3. Under **Authentication** $\rightarrow$ **Redirect URIs**, add one per environment's auth host:
    ```text
    https://dev.auth.hansacore.com/realms/portal/broker/microsoft/endpoint
@@ -257,12 +271,105 @@ Under **Certificates & secrets** → **New client secret**, create a secret and 
 **separate secret per environment** (description e.g. `hansacore-uat`), so one
 environment's secret can be revoked without breaking the others:
 ```text
-k8s/overlays/<env>/secrets/keycloak-clients.env  →  MICROSOFT_CLIENT_SECRET=<value>
+k8s/overlays/<env>/secrets/keycloak-clients.env  →  MICROSOFT_CLIENT_ID=<application (client) ID>
+                                                    MICROSOFT_CLIENT_SECRET=<value>
 ```
 Then re-render (`scripts/render-realm.sh <env>`). Note: realm import runs once on an
-empty database, so re-rendering only covers fresh installs — for a running cluster,
-also update the live `microsoft` identity provider via the Keycloak Admin API (or
-reset the keycloak database per §6 to force a re-import).
+empty database, so re-rendering only covers fresh installs. For a running cluster,
+`scripts/apply-realm-sso-onboarding.sh <env>` copies both values into the live
+`microsoft` identity provider (or reset the keycloak database per §6 to force a
+re-import).
+
+### Multi-tenant sign-in (other companies)
+Users from any Microsoft work directory can sign in. HansaCore recognises an
+organisation by the directory ID (`tid`) and by email domains Microsoft has
+verified (`xms_edov`), so the app registration must emit both:
+
+1. **Authentication** → *Supported account types*: **Accounts in any
+   organizational directory (multitenant)**. Personal Microsoft accounts stay
+   excluded; the realm uses the `/organizations/` endpoints.
+2. **Token configuration** → *Add optional claim* → **ID** token: `email`,
+   `xms_edov`, `given_name`, `family_name`. (`tid` is always in v2 tokens; the
+   names avoid the "update your profile" prompt on first login.)
+3. **Manifest** → `"authenticationBehaviors": { "removeUnverifiedEmailClaim": true }`,
+   so Microsoft drops `email` claims whose domain the directory has not verified.
+4. Keep the delegated permissions at `openid`, `profile`, `email`. Customers
+   whose directory blocks user consent need their admin to consent once:
+   `https://login.microsoftonline.com/organizations/adminconsent?client_id=<MICROSOFT_CLIENT_ID>`
+
+The Keycloak side (organizations endpoints, no fixed issuer, the `idp_*`
+attribute mappers, `identity_provider` token claim, no auto-linking by email,
+self-registration with email verification, SMTP, HansaCore theme) is in the
+realm template. For a running cluster apply it with:
+```bash
+bash scripts/build-images.sh keycloak && kubectl rollout restart deploy/keycloak -n hansacore
+bash scripts/apply-realm-sso-onboarding.sh <env>
+```
+SMTP settings live in `k8s/overlays/<env>/secrets/keycloak-smtp.env`
+(`scripts/bootstrap-secrets.sh` creates a placeholder). Without a working
+relay, local accounts cannot verify their email and finish registration.
+
+The ordered rollout for SIT (Entra, SMTP, images, schema check, apply script,
+registering Forty2, smoke tests) is in [`docs/sit-sso-rollout.md`](docs/sit-sso-rollout.md).
+
+### Provider-neutral token contract (adding Google, AWS, ...)
+The API does not read Microsoft claims. Every identity provider is mapped by
+Keycloak onto the same access-token claims, and the API decides per provider
+how far to trust them:
+
+| Claim | Meaning | Microsoft source |
+|-------|---------|------------------|
+| `identity_provider` | Keycloak identity provider alias (absent for local accounts) | session note |
+| `idp_directory_id` | the customer's directory at the provider | `tid` |
+| `idp_email` | the email as the provider sent it | `email` |
+| `idp_domain_verified` | the provider vouches for the email's domain | `xms_edov` |
+
+A customer is recognised by `(provider key, directory id)` bound to its
+MASTER_CLIENT, or by a verified domain plus a trusted email. The binding key
+for Microsoft is the fixed value `MICROSOFT`. An alias with no trust policy is
+trusted with nothing: such a person is turned away at first sign-in, so adding
+a Keycloak identity provider cannot open the platform before its policy exists.
+
+To add a provider (for example Google Workspace), later and not yet needed:
+1. Keycloak: add the identity provider and three attribute mappers onto
+   `idp_directory_id` (`hd`), `idp_email` (`email`) and `idp_domain_verified`
+   (`email_verified`); the existing gateway mappers already emit them.
+2. API: one class implementing `IdentityTrustPolicy` (trust rules, what counts as
+   an organisation directory), registered in `IdentityTrustPolicies`.
+3. Keycloak lists the new provider on its login page by itself; adjust the wording
+   in `hansacore-web` `login.component.html` and the theme if you want it named.
+
+### Registering an existing customer (Forty2)
+Customers created before SSO onboarding existed have no directory binding and no
+verified domain, because the onboarding schema only creates empty tables. Until
+they are registered, their colleagues are not recognised on first sign-in and a
+person from their directory could claim the directory and domain at `/onboarding`.
+Register each such customer once, **before opening sign-in to other companies**:
+```bash
+bash scripts/register-customer-directory.sh <env> "<customer name>" <directory-id> <domain> [<domain>...]
+# Forty2 (a customer of HansaCore that uses Microsoft Entra):
+bash scripts/register-customer-directory.sh sit "Forty2" <entra-directory-id> forty2.ch
+```
+`<directory-id>` is the customer's Entra tenant ID (Entra admin center →
+Overview → *Tenant ID*). The script binds it to the customer's MASTER_CLIENT and
+registers the domains as verified (first = primary). It runs in one
+transaction, can be repeated, and refuses a directory or domain that already
+belongs to another customer, personal Microsoft accounts, free-mail domains and
+reserved domains.
+
+### HansaCore operator accounts
+HansaCore staff have no identity provider. They are local Keycloak users in the
+`portal` realm, never self-registered, and they belong to the global operator
+tenant (`ETenant.MASTER`):
+- Create them in the Keycloak admin console (Users → *Add user*) with **Email
+  verified** switched on and a temporary password. An unverified email is
+  rejected by the API at first sign-in.
+- The email domain `hansacore.com` is reserved (`hansacore.onboarding.reserved-domains`,
+  comma list, default `hansacore.com`): no customer can register it, be matched
+  by it, or claim it at `/onboarding`.
+- Operator staff are matched to their `EUser` row by the verified email, as before.
+  System users (`technical_user@`, `intf_watsonx@`, `public_user@`, `investigation@`)
+  are never signed in through Keycloak by a person.
 
 ### Local Windows Trust (Green Padlock)
 To trust the local Certificate Authority on your Windows host:
@@ -317,7 +424,7 @@ config file is root-only); this is set in `~/.bashrc`.
    e.g. `gcloud compute scp --tunnel-through-iap`), and decide
    `HANSACORE_DEMODATA_ENABLED` before the first start.
 6. cert-manager is installed by `bootstrap-vm.sh` (or install manually).
-7. `bash scripts/build-images.sh` (builds and imports api, gateway, and web).
+7. `bash scripts/build-images.sh` (builds and imports api, gateway, web, and keycloak).
 8. Add the environment broker redirect URI in Entra (§4).
 9. `kubectl apply -k k8s/overlays/<env>`, then wait: a cold start takes
    about 5-10 minutes (see §6).
@@ -340,7 +447,7 @@ gcloud compute ssh hansacore-sit-vm --project=hansacore-sit --zone=europe-west6-
 cd ~/hansacore/hansacore-deployment && git pull      # repeat in the other repos
 
 # 4. Code changed in api / portal gateway / web? Rebuild those images:
-bash scripts/build-images.sh api            # or: gateway | web | (no args = all)
+bash scripts/build-images.sh api            # or: gateway | web | keycloak | (no args = all)
 
 # 5. Realm template or hostnames/secrets changed? Re-render the realm ConfigMap:
 scripts/render-realm.sh sit                 # or: uat

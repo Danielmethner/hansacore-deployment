@@ -2,8 +2,8 @@
 # Builds the HansaCore :local images and imports them into k3s' containerd,
 # which is where the Deployments (imagePullPolicy: IfNotPresent) look for them.
 # Run INSIDE the Multipass VM from the repo mount, e.g.:
-#   bash /home/ubuntu/hansacore/hansacore-deployment/scripts/build-images.sh [api|gateway|web ...]
-# No arguments builds all three. Afterwards restart the affected Deployments:
+#   bash /home/ubuntu/hansacore/hansacore-deployment/scripts/build-images.sh [api|gateway|web|keycloak ...]
+# No arguments builds all four. Afterwards restart the affected Deployments:
 #   sudo kubectl rollout restart deploy/<name> -n hansacore
 set -euo pipefail
 
@@ -13,23 +13,25 @@ declare -A CONTEXTS=(
   [api]="$ROOT/hansacore-api"
   [gateway]="$ROOT/hansacore-portal/gateway"
   [web]="$ROOT/hansacore-web"
+  [keycloak]="$ROOT/hansacore-deployment/identity"
 )
 declare -A IMAGES=(
   [api]="hansacore-api:local"
   [gateway]="portal-gateway:local"
   [web]="hansacore-web:local"
+  [keycloak]="hansacore-keycloak:local"
 )
 
 TARGETS=("$@")
 if [ ${#TARGETS[@]} -eq 0 ]; then
-  TARGETS=(api gateway web)
+  TARGETS=(api gateway web keycloak)
 fi
 
 for target in "${TARGETS[@]}"; do
   context="${CONTEXTS[$target]:-}"
   image="${IMAGES[$target]:-}"
   if [ -z "$context" ]; then
-    echo "Unknown target '$target' (expected: api, gateway, web)" >&2
+    echo "Unknown target '$target' (expected: api, gateway, web, keycloak)" >&2
     exit 1
   fi
   echo "==> Building $image from $context"

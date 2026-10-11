@@ -40,6 +40,7 @@ write_if_missing "$SECRETS_DIR/keycloak-admin.env" \
 write_if_missing "$SECRETS_DIR/keycloak-clients.env" \
   "PORTAL_GATEWAY_CLIENT_SECRET=$(randpw)" \
   "HANSACORE_API_CLIENT_SECRET=$(randpw)" \
+  "MICROSOFT_CLIENT_ID=PASTE_APP_CLIENT_ID_FROM_ENTRA_PORTAL" \
   "MICROSOFT_CLIENT_SECRET=PASTE_REAL_VALUE_FROM_ENTRA_PORTAL"
 
 # Migration for setups bootstrapped before the Microsoft IdP secret was
@@ -51,6 +52,14 @@ fi
 
 write_if_missing "$SECRETS_DIR/seed-users.env" \
   "SEED_USER_PASSWORD=$(randpw)"
+
+# Keycloak sends verification and password-reset emails through this relay.
+write_if_missing "$SECRETS_DIR/keycloak-smtp.env" \
+  "SMTP_HOST=PASTE_SMTP_HOST" \
+  "SMTP_PORT=587" \
+  "SMTP_FROM=no-reply@hansacore.com" \
+  "SMTP_USER=PASTE_SMTP_USER" \
+  "SMTP_PASSWORD=PASTE_SMTP_PASSWORD"
 
 if [ ! -f "$SECRETS_DIR/admin-basicauth.htpasswd" ]; then
   UI_PASSWORD="$(randpw)"
@@ -74,4 +83,11 @@ if grep -q '^MICROSOFT_CLIENT_SECRET=PASTE_REAL_VALUE_FROM_ENTRA_PORTAL' "$SECRE
   echo "ACTION NEEDED: paste the real Entra client secret *value* into"
   echo "  $SECRETS_DIR/keycloak-clients.env  (MICROSOFT_CLIENT_SECRET=...)"
   echo "A placeholder there fails Microsoft login with AADSTS7000215."
+fi
+
+if grep -q '^SMTP_HOST=PASTE_SMTP_HOST' "$SECRETS_DIR/keycloak-smtp.env" 2>/dev/null; then
+  echo ""
+  echo "ACTION NEEDED: fill in the SMTP relay in"
+  echo "  $SECRETS_DIR/keycloak-smtp.env"
+  echo "Without it, local accounts cannot verify their email and finish registration."
 fi

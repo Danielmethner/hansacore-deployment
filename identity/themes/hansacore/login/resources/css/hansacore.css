@@ -1,0 +1,67 @@
+/* HansaCore branding on top of the stock Keycloak login theme. */
+:root {
+  --hc-primary: #012c64;
+  --hc-primary-hover: #004aad;
+  --hc-text: #383838;
+}
+
+.login-pf body {
+  background: linear-gradient(160deg, #f4f7fb 0%, #e3ebf6 100%);
+  color: var(--hc-text);
+}
+
+#kc-header {
+  color: var(--hc-primary);
+}
+
+#kc-header-wrapper {
+  font-size: 0;
+  padding: 48px 10px 24px;
+  background: url("../img/logo.svg") no-repeat center 0 / 64px 64px;
+  text-transform: none;
+}
+
+#kc-header-wrapper::after {
+  content: "HansaCore";
+  display: block;
+  margin-top: 40px;
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--hc-primary);
+}
+
+.card-pf {
+  border-top: 4px solid var(--hc-primary);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(1, 44, 100, 0.12);
+}
+
+#kc-page-title {
+  color: var(--hc-primary);
+  font-weight: 600;
+}
+
+.pf-c-button.pf-m-primary,
+.btn-primary {
+  background-color: var(--hc-primary);
+  border-color: var(--hc-primary);
+}
+
+.pf-c-button.pf-m-primary:hover,
+.pf-c-button.pf-m-primary:focus,
+.btn-primary:hover,
+.btn-primary:focus {
+  background-color: var(--hc-primary-hover);
+  border-color: var(--hc-primary-hover);
+}
+
+a,
+a:hover {
+  color: var(--hc-primary-hover);
+}
+
+#kc-social-providers .pf-c-button {
+  border: 1px solid #c7d2e0;
+  border-radius: 4px;
+}
