@@ -1,0 +1,67 @@
+#cloud-config
+hostname: ${hostname}
+manage_etc_hosts: true
+package_update: true
+packages:
+  - git
+  - curl
+  - ca-certificates
+  - docker.io
+ssh_pwauth: false
+disable_root: false
+write_files:
+  - path: /etc/ssh/sshd_config.d/99-hansacore.conf
+    permissions: "0644"
+    content: |
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PermitRootLogin prohibit-password
+      PubkeyAuthentication yes
+  - path: /usr/local/sbin/hansacore-node-init.sh
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      systemctl reload ssh || systemctl reload sshd || true
+      systemctl enable --now docker
+
+      if [ ! -f /swapfile ]; then
+        fallocate -l 4G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=4096
+        chmod 600 /swapfile
+        mkswap /swapfile
+        swapon /swapfile
+        grep -q '/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+      fi
+
+      if ! command -v k3s >/dev/null 2>&1; then
+        curl -sfL https://get.k3s.io | INSTALL_K3S_CHANNEL=stable sh -s -
+      fi
+
+      mkdir -p /root/.kube
+      cp /etc/rancher/k3s/k3s.yaml /root/.kube/config
+      chmod 600 /root/.kube/config
+      grep -q 'KUBECONFIG=' /root/.bashrc || echo 'export KUBECONFIG=/root/.kube/config' >> /root/.bashrc
+      export KUBECONFIG=/root/.kube/config
+
+      ready=0
+      for _ in $(seq 1 60); do
+        if kubectl get nodes >/dev/null 2>&1; then
+          ready=1
+          break
+        fi
+        sleep 5
+      done
+      if [ "$ready" -ne 1 ]; then
+        echo "k3s node did not register" >&2
+        exit 1
+      fi
+      kubectl wait --for=condition=Ready node --all --timeout=300s
+
+      kubectl apply -f "https://github.com/cert-manager/cert-manager/releases/download/${cert_manager_version}/cert-manager.yaml"
+      kubectl -n cert-manager rollout status deploy/cert-manager --timeout=300s
+      kubectl -n cert-manager rollout status deploy/cert-manager-cainjector --timeout=300s
+      kubectl -n cert-manager rollout status deploy/cert-manager-webhook --timeout=300s
+      touch /var/lib/hansacore-node-init-done
+runcmd:
+  - /usr/local/sbin/hansacore-node-init.sh

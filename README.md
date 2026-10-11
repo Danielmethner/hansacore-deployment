@@ -2,10 +2,13 @@
 
 Infrastructure-as-Code and Kubernetes manifests for deploying the **HansaCore** platform on a single-node **k3s Kubernetes cluster**.
 
-The same base manifests run in three places; each has its own Kustomize overlay:
+The same base manifests run in four places; each has its own Kustomize overlay:
 1. **DEV (`overlays/local-vm`)**: an Ubuntu 24.04 VM via **Canonical Multipass** on Windows 11 Hyper-V (§3).
-2. **SIT (`overlays/sit`)**: a single **Google Cloud Compute Engine VM** (`hansacore-sit-vm`, europe-west6) running k3s in its own project `hansacore-sit`, provisioned with **Terraform** (`infra/`) and `scripts/bootstrap-vm.sh` (§5, §7).
-3. **UAT (`overlays/uat`)**: the same shape as SIT in its own project `hansacore-uat`, provisioned with **Terraform** (`infra/`) and `scripts/bootstrap-vm.sh` (§5, §7).
+2. **SIT (`overlays/sit`)**: a single **Hetzner Cloud** VM (`hansacore-sit`, `cx33`, Nuremberg) running k3s, provisioned with **Terraform** (`infra/`) and `scripts/manage-env.sh` (§8).
+3. **UAT (`overlays/uat`)**: the same shape as SIT (`hansacore-uat`, `cx33`) (§8).
+4. **PROD (`overlays/prod`)**: the same shape on a larger VM (`hansacore-prod`, `cx43`, 16 GB) (§8).
+
+The old GCP Terraform is under `infra/gcp/` and is unused. The GCP project is shut down (§5, §7 are the old runbook).
 
 Deploying a change is `git pull`, optionally rebuild images, then `kubectl apply -k <overlay>`; see §5 ("Deploying changes") for the exact routine.
 
@@ -20,8 +23,8 @@ Pattern: `<env>.<app>.hansacore.com`; production has no environment label.
 | Environment | Portal | ERP (`hansacore-web`) | Keycloak |
 | :--- | :--- | :--- | :--- |
 | PROD | `hansacore.com` | `erp.hansacore.com` | `auth.hansacore.com` |
-| UAT (GCP, `overlays/uat`) | `uat.hansacore.com` | `uat.erp.hansacore.com` | `uat.auth.hansacore.com` |
-| SIT (GCP, `overlays/sit`) | `sit.hansacore.com` | `sit.erp.hansacore.com` | `sit.auth.hansacore.com` |
+| UAT (Hetzner, `overlays/uat`) | `uat.hansacore.com` | `uat.erp.hansacore.com` | `uat.auth.hansacore.com` |
+| SIT (Hetzner, `overlays/sit`) | `sit.hansacore.com` | `sit.erp.hansacore.com` | `sit.auth.hansacore.com` |
 | DEV (Multipass, `overlays/local-vm`) | `dev.hansacore.com` | `dev.erp.hansacore.com` | `dev.auth.hansacore.com` |
 
 One login for all app hosts: each app host has its own host-only gateway
@@ -71,7 +74,7 @@ portal sub-apps go under the portal host as subpaths.
 
 | Service | Technology | Port | Purpose |
 | :--- | :--- | :--- | :--- |
-| **`postgres`** | PostgreSQL 16 Alpine | `5432` | Dual database instance (`hansacore` and `keycloak`). DEV: `local-path` PVC; SIT: `hostPath` on a dedicated pd-ssd data disk |
+| **`postgres`** | PostgreSQL 16 Alpine | `5432` | Dual database instance (`hansacore` and `keycloak`). StatefulSet on a `local-path` volume in every environment. Prod sets `shared_buffers=1GB` |
 | **`keycloak`** | Keycloak 24.0 (`start`, not `start-dev`) | `8080` | Identity and Access Management with Microsoft Entra ID OIDC identity broker |
 | **`hansacore-api`** | Spring Boot 3.4 / Java 21 | `8081` | Core trading and backoffice REST API resource server |
 | **`portal-gateway`** | Spring Cloud Gateway / BFF | `8080` | Secure session gateway, OAuth2 token relay, and reverse proxy |
@@ -95,9 +98,8 @@ hansacore-deployment/
 │   │   │                               # secrets, no hardcoded hostnames/IPs)
 │   │   ├── kustomization.yaml
 │   │   ├── 00-namespace.yaml
-│   │   ├── 01-postgres.yaml            # PVC, Deployment, Service (init.sh reads
-│   │   │                               # DB passwords from env, not baked in).
-│   │   │                               # The gcp overlay swaps the PVC for a hostPath.
+│   │   ├── 01-postgres.yaml            # StatefulSet, local-path volume, Service
+│   │   │                               # (init.sh reads DB passwords from env).
 │   │   ├── 02-keycloak.yaml            # `start` (not `start-dev`), hostname from
 │   │   │                               # hansacore-env ConfigMap, admin pw from Secret
 │   │   ├── 03-hansacore-api.yaml
@@ -107,39 +109,39 @@ hansacore-deployment/
 │   │   ├── 06-ingress-portal.yaml      # portal host: placeholder + gateway paths
 │   │   ├── 06-ingress-auth.yaml        # auth host: Keycloak OIDC endpoints
 │   │   ├── 07-ingress-admin.yaml       # auth host /admin only, + BasicAuth middleware
-│   │   │                               # (the gcp overlay removes the BasicAuth, see §6)
+│   │   │                               # (hetzner-vm removes the BasicAuth, see §6)
 │   │   ├── 08-middlewares.yaml         # Traefik: HTTPS redirect, BasicAuth, HSTS,
 │   │   │                               # X-Frame-Options SAMEORIGIN
 │   │   ├── 09-networkpolicies.yaml     # default-deny + explicit pod-to-pod allows
 │   │   ├── 10-ingress-http-redirect.yaml
 │   │   └── 11-portal-placeholder.yaml  # stand-in portal page (nginx + ConfigMap)
+│   ├── templates/
+│   │   └── backup-cronjob.yaml         # inactive S3 dump; not part of an overlay (§8)
 │   ├── components/
 │   │   ├── demo-data/                  # demo tenants/users for the API (all overlays)
 │   │   │   ├── kustomization.yaml          # ConfigMap generator + api mount/import
 │   │   │   └── demo-data.yml               # git-ignored (real names/emails)
-│   │   └── gcp-vm/                     # shared by sit + uat: Postgres hostPath on the
-│   │                                   # data disk, admin Ingress without BasicAuth
+│   │   ├── gcp-vm/                     # legacy GCP hostPath patches; do not use
+│   │   └── hetzner-vm/                 # sit + uat + prod: admin Ingress without BasicAuth
 │   └── overlays/
 │       ├── local-vm/                   # DEV: Multipass VM target
 │       │   ├── kustomization.yaml          # Ingress host patches, api profile `dev`
 │       │   ├── dev-ca-trust.patch.yaml     # DEV-only CA truststore for api + gateway
 │       │   ├── hansacore-env.properties    # this env's hostnames / issuer / CORS
 │       │   └── secrets/*.env.example       # templates; real .env files are git-ignored
-│       ├── sit/                        # SIT: GCP VM target (project hansacore-sit)
-│       │   ├── kustomization.yaml          # host patches, api profile `sit`, gcp-vm component
+│       ├── sit/                        # SIT: Hetzner VM (hansacore-sit)
+│       │   ├── kustomization.yaml          # host patches, api profile `sit`, hetzner-vm component
 │       │   ├── 04-cert-issuers.yaml        # cert-manager ClusterIssuers (LE staging + prod)
 │       │   ├── 05-certificate.yaml         # one Certificate, 3 SANs -> Secret hansacore-tls
 │       │   ├── hansacore-env.properties    # SIT hostnames / issuer / CORS
 │       │   └── secrets/*.env.example       # templates; no custom truststore
-│       └── uat/                        # UAT: GCP VM target (project hansacore-uat),
-│                                       # same files as sit/, api profile `uat`
-├── infra/                               # Terraform (§7)
-│   ├── modules/environment/            # one GCP environment: VPC, firewall, IP, VM,
-│   │                                   # data disk, service account, IAM, DNS
-│   ├── projects/sit/                   # long-lived: project, APIs, budget (SIT)
-│   ├── envs/sit/                       # disposable: calls modules/environment (SIT)
-│   ├── projects/uat/                   # long-lived: project, APIs, budget (UAT)
-│   └── envs/uat/                       # disposable: calls modules/environment (UAT)
+│       ├── uat/                        # UAT: Hetzner VM (hansacore-uat), api profile `uat`
+│       └── prod/                       # PROD: Hetzner VM (hansacore-prod), api profile `prod`
+├── infra/                               # Terraform (§8). Hetzner is the live layout.
+│   ├── shared/                         # firewall, DNS zone, private network, SSH key
+│   ├── modules/server/                 # one Hetzner VM
+│   ├── envs/sit|uat|prod/              # one server each
+│   └── gcp/                            # unused GCP stack (projects, envs, environment module)
 ├── identity/
 │   └── portal-realm.template.json      # Keycloak realm export, WITH PLACEHOLDERS
 │                                        # (__ERP_BASE_URL__, __PORTAL_BASE_URL__,
@@ -148,7 +150,8 @@ hansacore-deployment/
 │   ├── bootstrap-secrets.sh            # generates git-ignored secret files per overlay
 │   ├── render-realm.sh                 # renders the realm template -> per-overlay ConfigMap
 │   ├── build-images.sh                 # builds the :local images on the VM (all envs)
-│   ├── bootstrap-vm.sh                 # GCP VM: Docker, k3s, data disk, repos, cert-manager
+│   ├── bootstrap-vm.sh                 # old GCP VM bootstrap (data disk, repos, cert-manager)
+│   ├── manage-env.sh                   # Hetzner: status, deploy, build, logs, db-shell (§8)
 │   └── rebuild-local-db.ps1            # DEV: drops the hansacore schema and re-seeds
 ├── ssl/                                 # TLS Certificate & Java Truststore automation
 │   └── generate-certs.sh               # DEV only; reuses the CA, certs for the dev.* hosts
@@ -165,16 +168,16 @@ environment-specific lives in exactly one place per environment:
 `k8s/overlays/<env>/hansacore-env.properties` (hostnames/CORS/issuer, plus
 the matching Ingress host patches in that overlay's `kustomization.yaml`) and
 `k8s/overlays/<env>/secrets/*.env` (passwords/client secrets, git-ignored).
-That's what makes the local Multipass VM and the GCP VM both usable from
+That's what makes the local Multipass VM and the Hetzner VMs usable from
 the same base manifests.
 
 ### API profiles, truststore and demo data
 
 The same `hansacore-api` image runs everywhere; the overlay decides how.
 
-| | DEV (`local-vm`) | SIT (`gcp`) |
+| | DEV (`local-vm`) | SIT / UAT / PROD |
 | :--- | :--- | :--- |
-| `SPRING_PROFILES_ACTIVE` (api only) | `dev` (smoke tests run) | `sit` (Swagger off) |
+| `SPRING_PROFILES_ACTIVE` (api only) | `dev` (smoke tests run) | `sit` / `uat` / `prod` (Swagger off) |
 | Custom CA truststore | yes, `dev-ca-trust.patch.yaml` | no, JVM default (public certs) |
 | Demo tenants/users | `components/demo-data` | `components/demo-data` |
 | `HANSACORE_DEMODATA_ENABLED` | `true` | `true` (for now) |
@@ -328,9 +331,11 @@ Import-Certificate -FilePath "ssl\ca.crt" -CertStoreLocation "Cert:\CurrentUser\
 
 ---
 
-## 5. GCP (SIT and UAT)
+## 5. GCP (SIT and UAT) — shut down
 
-SIT and UAT each run on a dedicated Compute Engine VM running k3s, provisioned
+The GCP project is shut down. SIT, UAT, and prod run on Hetzner (§8). This section is the old runbook.
+
+SIT and UAT each ran on a dedicated Compute Engine VM running k3s, provisioned
 via Terraform (`infra/`). `k8s/overlays/sit` carries SIT hostnames
 (`sit.hansacore.com`, `sit.erp.hansacore.com`, `sit.auth.hansacore.com`), and
 `k8s/overlays/uat` carries UAT hostnames (`uat.*`).
@@ -449,9 +454,9 @@ and `k8s/overlays/sit` for SIT, or `uat` and `k8s/overlays/uat` for UAT):
 scripts/render-realm.sh local-vm
 
 # 2. Reset keycloak database in postgres
-kubectl exec -n hansacore deploy/postgres -- psql -U postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'keycloak' AND pid <> pg_backend_pid();"
-kubectl exec -n hansacore deploy/postgres -- psql -U postgres -c "DROP DATABASE IF EXISTS keycloak;"
-kubectl exec -n hansacore deploy/postgres -- psql -U postgres -c "CREATE DATABASE keycloak OWNER keycloak;"
+kubectl exec -n hansacore sts/postgres -- psql -U postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'keycloak' AND pid <> pg_backend_pid();"
+kubectl exec -n hansacore sts/postgres -- psql -U postgres -c "DROP DATABASE IF EXISTS keycloak;"
+kubectl exec -n hansacore sts/postgres -- psql -U postgres -c "CREATE DATABASE keycloak OWNER keycloak;"
 
 # 3. Re-apply and restart
 kubectl apply -k k8s/overlays/local-vm
@@ -527,7 +532,8 @@ kubectl describe pod -n hansacore -l app=keycloak
 | Keycloak admin console stuck on "Loading the Admin UI" | Traefik's `frameDeny` sent `X-Frame-Options: DENY`, which blocks the console's own same-origin iframe. The middleware uses `customFrameOptionsValue: SAMEORIGIN`. |
 | Keycloak gets OOMKilled (exit code 137) during startup | Keycloak 24's Quarkus augmentation and realm import require at least 1024Mi memory request and 2048Mi limit (configured in `k8s/base/02-keycloak.yaml`). |
 | Pods restart 1-5 times on a cold boot | On a 2-vCPU machine, CPU contention during initial JVM startup and realm import can cause startup probe delays or transient dependency timeouts (e.g. `portal-gateway` waiting for Keycloak to serve discovery metadata). This is normal; pods recover automatically once upstream services report ready. |
-| Postgres comes back empty after a VM restart | The data disk was not mounted (`nofail`) and Postgres started on the boot disk. Check `findmnt /mnt/disks/postgres-data`, fix the mount, then restart the postgres pod. |
+| Postgres comes back empty after a VM restart | On the old GCP VM, the data disk was not mounted (`nofail`) and Postgres started on the boot disk. Check `findmnt /mnt/disks/postgres-data`, fix the mount, then restart the postgres pod. On Hetzner the data is the StatefulSet volume `postgres-storage-postgres-0` on the server's local disk (`/var/lib/rancher/k3s/storage`). That disk is deleted with the server. |
+| Local-vm Postgres looks empty after the StatefulSet change | The claim is now `postgres-storage-postgres-0`. An older `postgres-pvc` is not mounted. Re-seed, or copy the data directory across and delete the old claim. |
 
 ### Changing hostnames on a running cluster
 The realm import only runs on an empty Keycloak database, so after changing
@@ -591,9 +597,9 @@ flowchart TD
 
 | Directory | What | Lifetime |
 | :--- | :--- | :--- |
-| `infra/modules/environment/` | One environment: VPC + subnet, firewall (80/443, SSH from IAP only), static IP, pd-ssd data disk, VM (OS Login, shielded), VM service account and its IAM, A records, ACME zone + NS delegation + `_acme-challenge` CNAMEs | reused per env |
-| `infra/projects/sit/`, `infra/projects/uat/` | Dedicated project (`hansacore-sit`, `hansacore-uat`) in folder `nonprod`, APIs, monthly budget (50/90/100%), optional external-IP org policy override | long-lived (`deletion_policy = PREVENT`) |
-| `infra/envs/sit/`, `infra/envs/uat/` | Calls the module with the environment values | disposable: `terraform destroy` removes the environment, the project stays |
+| `infra/gcp/modules/environment/` | One environment: VPC + subnet, firewall (80/443, SSH from IAP only), static IP, pd-ssd data disk, VM (OS Login, shielded), VM service account and its IAM, A records, ACME zone + NS delegation + `_acme-challenge` CNAMEs | reused per env |
+| `infra/gcp/projects/sit/`, `infra/gcp/projects/uat/` | Dedicated project (`hansacore-sit`, `hansacore-uat`) in folder `nonprod`, APIs, monthly budget (50/90/100%), optional external-IP org policy override | long-lived (`deletion_policy = PREVENT`) |
+| `infra/gcp/envs/sit/`, `infra/gcp/envs/uat/` | Calls the module with the environment values | disposable: `terraform destroy` removes the environment, the project stays |
 
 The two layers are separate because a deleted project ID stays reserved
 for 30 days, so destroying and recreating an environment must not touch the
@@ -603,7 +609,7 @@ State lives in `gs://hansacore-tfstate` (versioned), one prefix per root
 (`projects/sit`, `envs/sit`, `projects/uat`, `envs/uat`); never on a laptop or in Git.
 `.terraform.lock.hcl` is committed so every run uses the same provider version.
 
-Everyday commands, run from the root directory (`infra/projects/uat` or `infra/envs/uat`):
+Everyday commands, run from the root directory (`infra/gcp/projects/uat` or `infra/gcp/envs/uat`):
 
 ```powershell
 terraform init                 # once per checkout; downloads the provider, connects the state bucket
@@ -655,7 +661,7 @@ All commands run in PowerShell on your machine unless stated otherwise.
    - `iam.allowedPolicyMemberDomains`: new IAM grants to non-`hansacore.com`
      accounts (your Gmail) might be blocked. Work as `gcp-admin@hansacore.com` from now on.
    - `compute.vmExternalIpAccess`: if listed, set `allow_vm_external_ip = true`
-     in `infra/projects/uat/terraform.tfvars`, otherwise the VM can't get its public IP.
+     in `infra/gcp/projects/uat/terraform.tfvars`, otherwise the VM can't get its public IP.
    - `compute.requireOsLogin`: UAT uses OS Login anyway.
 7. Folders:
    ```powershell
@@ -705,9 +711,9 @@ project ID `hansacore-uat` (`project_id` in both roots).
 **4. Terraform apply**
 
 1. Fill `folder_id` (nonprod) and `billing_account` in
-   `infra/projects/uat/terraform.tfvars`, then:
+   `infra/gcp/projects/uat/terraform.tfvars`, then:
    ```powershell
-   cd infra\projects\uat
+   cd infra\gcp\projects\uat
    terraform init; terraform validate; terraform plan -out=tfplan
    terraform apply tfplan
    ```
@@ -778,7 +784,7 @@ Microsoft, the admin console loads (turn on brute-force detection in the
 **8. Prove repeatability**
 
 ```powershell
-cd infra\envs\uat
+cd infra\gcp\envs\uat
 terraform destroy          # VM, disks, IP, DNS records, ACME zone; the project stays
 terraform apply            # new VM and IP; Terraform updates the A records
 ```
@@ -794,7 +800,152 @@ secret in your password manager so step 7 doesn't need a new one. Notes:
 
 ### Adding another environment (e.g. PROD)
 
-Copy `infra/projects/uat` and `infra/envs/uat` (change `project_id`,
+Prod is already defined for Hetzner in §8. The steps below are the old GCP copy procedure.
+
+Copy `infra/gcp/projects/uat` and `infra/gcp/envs/uat` (change `project_id`,
 `folder_id`, `env`, `subnet_cidr`, `hostnames`, the backend `prefix`, and
 `vm_name`), copy `k8s/overlays/uat` with the new hostnames, and add
 `application-<env>.properties` in `hansacore-api`.
+
+---
+
+## 8. Hetzner Cloud (SIT, UAT, PROD)
+
+Three single-node k3s VMs in one Cloud project `hansacore`, location `nbg1` (Nuremberg). Postgres stays on the server's local NVMe via the k3s `local-path` provisioner. That disk is persistent across reboots, but deleted when the server is destroyed. Prod turns on Hetzner automatic backups for that reason. `k8s/templates/backup-cronjob.yaml` is an inactive off-site dump template (suspended, and not part of any overlay).
+
+### Server Types in Nuremberg (`nbg1`)
+
+The older `cx33`/`cx43` types are currently out of capacity (`Available: no`) in European datacenters. We use the active compute-optimized AMD EPYC line (**`cpx`**), which delivers dedicated AMD EPYC performance and PCIe RAID-10 NVMe (<0.4 ms fsync):
+
+| Environment | Server | Type | Specs | Monthly (net) |
+| :--- | :--- | :--- | :--- | :--- |
+| SIT | `hansacore-sit` | `cpx22` (or `cpx32`) | 2 vCPU AMD, 4 GB RAM, 80 GB NVMe | €19.49 |
+| UAT | `hansacore-uat` | `cpx22` (or `cpx32`) | 2 vCPU AMD, 4 GB RAM, 80 GB NVMe | €19.49 |
+| PROD | `hansacore-prod` | `cpx32` | 4 vCPU AMD, 8 GB RAM, 160 GB NVMe | €35.49 |
+
+`hcloud` is the CLI (servers, firewall, DNS, SSH), the same role `gcloud` had. Terraform uses provider `hetznercloud/hcloud` and reads `HCLOUD_TOKEN`. State is local and git-ignored under each environment.
+
+### Account Setup
+
+1. Sign up at [https://accounts.hetzner.com/signUp](https://accounts.hetzner.com/signUp). Choose **EUR**. Verify email and add a payment method.
+2. In [https://console.hetzner.com](https://console.hetzner.com), create a project named `hansacore`.
+3. Create a Read & Write API token. Set it in PowerShell: `$env:HCLOUD_TOKEN = "<token>"`.
+4. Install and configure the CLI on Windows:
+   ```powershell
+   winget install HetznerCloud.CLI
+   hcloud context create hansacore
+   hcloud location list
+   ```
+5. Ensure an SSH key is present (`ssh-keygen -t ed25519`). Terraform uploads the public half.
+
+### Infrastructure Layout
+
+The codebase cleanly separates Hetzner from archived GCP configurations:
+
+```text
+infra/
+├── hetzner/
+│   ├── shared/                     # SSH key, firewall, private network, DNS zone
+│   ├── modules/server/             # Dedicated Primary IPv4, VM, cloud-init, network attach
+│   └── envs/                       # Dedicated environment roots
+│       ├── sit/                    # cpx22, SIT A records
+│       ├── uat/                    # cpx22, UAT A records
+│       └── prod/                   # cpx32, PROD A records, backups enabled
+└── gcp/                            # Preserved GCP IaC for historical reference
+```
+
+Cloud-init (first boot only) disables SSH password auth, adds a 4 GB swap, installs Docker and k3s (`--disable servicelb`, Traefik left on, containerd runtime), and installs cert-manager `v1.21.2`. Later edits to cloud-init are ignored by Terraform so a formatting change cannot replace the server and wipe Postgres.
+
+Login is `root` with the uploaded SSH key.
+
+### Terraform Apply
+
+1. Configure `infra/hetzner/shared`:
+   Copy `infra/hetzner/shared/terraform.tfvars.example` to `terraform.tfvars` and paste your SSH public key.
+   ```powershell
+   cd infra\hetzner\shared
+   terraform init
+   terraform plan -out=tfplan
+   terraform apply tfplan
+   terraform output nameservers
+   ```
+2. Update domain nameservers in Squarespace to the outputs printed (`hydrogen.ns.hetzner.com`, `oxygen.ns.hetzner.com`, `helium.ns.hetzner.de`).
+3. Deploy environments:
+   ```powershell
+   cd ..\envs\sit
+   terraform init
+   terraform apply
+
+   cd ..\uat
+   terraform init
+   terraform apply
+
+   cd ..\prod
+   terraform init
+   terraform apply
+   ```
+
+### First Boot on a New VM
+
+Cloud-init prepares k3s and cert-manager. From Git Bash:
+
+```bash
+bash scripts/manage-env.sh status sit
+hcloud server ssh hansacore-sit
+```
+
+On the server as root:
+
+```bash
+git config --global credential.helper store
+mkdir -p /root/hansacore
+git clone https://github.com/Danielmethner/hansacore-deployment.git /root/hansacore/hansacore-deployment
+git clone https://github.com/Danielmethner/hansacore-api.git /root/hansacore/hansacore-api
+git clone https://github.com/Danielmethner/hansacore-web.git /root/hansacore/hansacore-web
+git clone https://github.com/Danielmethner/hansacore-portal.git /root/hansacore/hansacore-portal
+```
+
+For SIT/UAT only: copy `demo-data.yml` into `/root/hansacore/hansacore-deployment/k8s/components/demo-data/`. (PROD does not use demo-data).
+
+```bash
+cd /root/hansacore/hansacore-deployment
+scripts/bootstrap-secrets.sh sit
+# Put Microsoft Entra client secret in k8s/overlays/sit/secrets/keycloak-clients.env
+scripts/render-realm.sh sit
+```
+
+Add the broker redirect in Entra:
+* `https://sit.auth.hansacore.com/realms/portal/broker/microsoft/endpoint`
+* `https://uat.auth.hansacore.com/realms/portal/broker/microsoft/endpoint`
+* `https://auth.hansacore.com/realms/portal/broker/microsoft/endpoint`
+
+### Day to Day Operations
+
+`scripts/manage-env.sh` runs from Git Bash or Windows terminal:
+
+```bash
+bash scripts/manage-env.sh status sit
+bash scripts/manage-env.sh deploy sit          # pull, build images, render realm, apply, restart
+bash scripts/manage-env.sh build sit api       # or: gateway | web
+bash scripts/manage-env.sh logs sit api        # api, gateway, web, keycloak, postgres, portal
+bash scripts/manage-env.sh db-shell sit
+```
+
+### SSL Certificate Cutover
+
+1. Initial deployments use `letsencrypt-staging` in `05-certificate.yaml` to avoid ACME rate limits during testing.
+2. Verify domain resolution and smoke test: `curl -k https://sit.auth.hansacore.com/realms/portal/.well-known/openid-configuration`.
+3. Cut over to production: In `05-certificate.yaml`, change `issuerRef.name` to `letsencrypt-prod`, delete the Certificate and `hansacore-tls` Secret, and re-apply:
+   ```bash
+   kubectl delete certificate hansacore-tls -n hansacore
+   kubectl delete secret hansacore-tls -n hansacore
+   kubectl apply -k k8s/overlays/sit
+   ```
+
+### Enterprise Banking Readiness (Priority 2)
+
+HansaCore incorporates key enterprise banking requirements:
+1. **Dedicated Static Public IPv4:** Each VM is assigned an `hcloud_primary_ip` that does not change across reboots or rebuilds, allowing banks to add origin IP exceptions.
+2. **TLS 1.2+ Baseline:** Traefik TLSOption (`12-traefik-tls-banking.yaml`) enforces `minVersion: VersionTLS12` and strict modern cipher suites (AES-GCM and ChaCha20), preventing connection drops by corporate inspection proxies.
+3. **Security Headers:** Enforced HSTS (`max-age=31536000`), `X-Content-Type-Options: nosniff`, and `X-Frame-Options: SAMEORIGIN` via Traefik middlewares.
+4. **Valid Production Certificates:** Enterprise banking proxies strictly reject staging or self-signed certificates; ensure step 3 above (production issuer) is completed before bank integration tests.

@@ -1,7 +1,6 @@
-# Patches shared by every environment that runs on a single GCP VM
-# (overlays/gcp = SIT, overlays/uat). The VM is prepared by
-# scripts/bootstrap-vm.sh, which mounts the pd-ssd data disk at
-# /mnt/disks/postgres-data.
+# Legacy GCP data-disk patches. SIT, UAT, and prod use components/hetzner-vm.
+# The Deployment/postgres patch below does not match the StatefulSet in
+# k8s/base/01-postgres.yaml. Do not add this component to an overlay.
 apiVersion: kustomize.config.k8s.io/v1alpha1
 kind: Component
 

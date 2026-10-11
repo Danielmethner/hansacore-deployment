@@ -1,3 +1,7 @@
+# HTTP-01 through the k3s Traefik ingress. No DNS API token in the cluster.
+# The catch-all HTTP redirect Ingress matches PathPrefix `/` with no Host.
+# cert-manager's solver Ingress is Host + `/.well-known/acme-challenge/`,
+# which Traefik ranks higher, so the challenge is not redirected.
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
 metadata:
@@ -9,11 +13,9 @@ spec:
     privateKeySecretRef:
       name: letsencrypt-staging-account-key
     solvers:
-      - dns01:
-          cnameStrategy: Follow
-          cloudDNS:
-            project: hansacore
-            hostedZoneName: hansacore-sit-acme-zone
+      - http01:
+          ingress:
+            ingressClassName: traefik
 ---
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
@@ -26,8 +28,6 @@ spec:
     privateKeySecretRef:
       name: letsencrypt-prod-account-key
     solvers:
-      - dns01:
-          cnameStrategy: Follow
-          cloudDNS:
-            project: hansacore
-            hostedZoneName: hansacore-sit-acme-zone
+      - http01:
+          ingress:
+            ingressClassName: traefik

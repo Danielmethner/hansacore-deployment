@@ -24,7 +24,8 @@ k8s/overlays/*/secrets/*.htpasswd
 # generated (scripts/render-realm.sh). Never commit this.
 k8s/overlays/*/02a-keycloak-realm-cm.generated.yaml
 
-# Terraform: provider cache and local state (state lives in gs://hansacore-tfstate).
+# Terraform: provider cache and local state (old GCP state lived in
+# gs://hansacore-tfstate; Hetzner state is local under infra/shared and infra/envs).
 # .terraform.lock.hcl IS committed.
 .terraform/
 *.tfstate
@@ -32,6 +33,9 @@ k8s/overlays/*/02a-keycloak-realm-cm.generated.yaml
 *.tfplan
 tfplan
 crash.log
+# Machine-local Hetzner values (SSH public key). Examples stay tracked.
+infra/hetzner/**/terraform.tfvars
+infra/**/terraform.tfvars
 
 # IDE & OS
 .DS_Store

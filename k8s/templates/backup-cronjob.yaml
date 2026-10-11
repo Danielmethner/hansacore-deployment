@@ -1,0 +1,102 @@
+# Inactive Postgres dump template. This file is not part of any Kustomize
+# overlay, and the CronJob is suspended, so applying it by hand does not
+# upload anything until both of the steps below are done.
+#
+# Prod's safety net at launch is the Hetzner server backup
+# (infra/envs/prod, backups = true), not this job. Turn this on when
+# you want a copy in Hetzner Object Storage or Cloudflare R2.
+#
+# Activation:
+# 1. Create Secret postgres-backup-s3 in namespace hansacore:
+#      AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION,
+#      S3_BUCKET, S3_ENDPOINT
+#    S3_ENDPOINT is the HTTPS endpoint, for example
+#    https://nbg1.your-objectstorage.com or https://<account>.r2.cloudflarestorage.com
+# 2. kubectl apply -f k8s/templates/backup-cronjob.yaml
+# 3. Set suspend: false and apply again.
+# 4. Run one job by hand:
+#      kubectl -n hansacore create job --from=cronjob/postgres-backup postgres-backup-manual
+#    Then kubectl -n hansacore logs job/postgres-backup-manual
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: postgres-backup
+  namespace: hansacore
+spec:
+  schedule: "0 3 * * *"
+  suspend: true
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: backup
+              image: postgres:16-alpine
+              imagePullPolicy: IfNotPresent
+              securityContext:
+                runAsUser: 0
+              env:
+                - name: PGHOST
+                  value: postgres.hansacore.svc.cluster.local
+                - name: PGUSER
+                  value: postgres
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: postgres-secret
+                      key: POSTGRES_PASSWORD
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: postgres-backup-s3
+                      key: AWS_ACCESS_KEY_ID
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: postgres-backup-s3
+                      key: AWS_SECRET_ACCESS_KEY
+                - name: AWS_REGION
+                  valueFrom:
+                    secretKeyRef:
+                      name: postgres-backup-s3
+                      key: AWS_REGION
+                - name: AWS_DEFAULT_REGION
+                  valueFrom:
+                    secretKeyRef:
+                      name: postgres-backup-s3
+                      key: AWS_REGION
+                - name: S3_BUCKET
+                  valueFrom:
+                    secretKeyRef:
+                      name: postgres-backup-s3
+                      key: S3_BUCKET
+                - name: S3_ENDPOINT
+                  valueFrom:
+                    secretKeyRef:
+                      name: postgres-backup-s3
+                      key: S3_ENDPOINT
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -eu
+                  apk add --no-cache aws-cli gzip
+                  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+                  raw="/tmp/hansacore-${stamp}.sql"
+                  file="${raw}.gz"
+                  pg_dumpall -h "$PGHOST" -U "$PGUSER" > "$raw"
+                  gzip "$raw"
+                  aws s3 cp --endpoint-url "$S3_ENDPOINT" "$file" "s3://${S3_BUCKET}/hansacore/${stamp}.sql.gz"
+                  rm -f "$file"
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi

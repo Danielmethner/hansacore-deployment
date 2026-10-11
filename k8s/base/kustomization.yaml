@@ -19,3 +19,4 @@ resources:
   - 09-networkpolicies.yaml
   - 10-ingress-http-redirect.yaml
   - 11-portal-placeholder.yaml
+  - 12-traefik-tls-banking.yaml

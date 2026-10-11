@@ -1,0 +1,18 @@
+# Shared by every environment that runs on a single Hetzner Cloud VM
+# (overlays/sit, overlays/uat, overlays/prod). Postgres data stays on the
+# StatefulSet local-path volume; there is no separate data disk.
+#
+# BasicAuth on /admin conflicts with the admin console's own
+# "Authorization: Bearer" calls to /admin/realms/*, so drop the
+# admin-basic-auth middleware (README §6, troubleshooting).
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+patches:
+  - target:
+      kind: Ingress
+      name: hansacore-ingress-admin
+    patch: |-
+      - op: replace
+        path: /metadata/annotations/traefik.ingress.kubernetes.io~1router.middlewares
+        value: hansacore-redirect-https@kubernetescrd,hansacore-security-headers@kubernetescrd

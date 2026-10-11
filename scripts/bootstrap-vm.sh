@@ -1,5 +1,5 @@
 #!/bin/bash
-# Prepares a fresh GCP VM (created by infra/envs/<env>) for HansaCore:
+# Prepares a fresh GCP VM (created by infra/gcp/envs/<env>) for HansaCore:
 # Docker, k3s, kubectl config, the Postgres data disk, the four repos and a
 # pinned cert-manager. Idempotent: every step checks before it acts, so it is
 # safe to re-run after a failure.

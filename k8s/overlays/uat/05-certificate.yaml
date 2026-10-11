@@ -1,3 +1,8 @@
+# First issue uses the staging issuer so a failed attempt does not burn
+# the production rate limit (5 certificates per week for this exact set of
+# names). After `kubectl get certificate -n hansacore` shows READY True,
+# change issuerRef.name to letsencrypt-prod, delete the Certificate and the
+# hansacore-tls Secret, and apply again.
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:

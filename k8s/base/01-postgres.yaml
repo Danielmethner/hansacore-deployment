@@ -11,7 +11,7 @@ data:
   # Runs as a shell script (not raw .sql) so it can read the DB passwords
   # from container environment variables instead of having them baked into
   # this ConfigMap in plaintext. Values come from the postgres-secret Secret
-  # (see below) via `envFrom` on the postgres Deployment.
+  # (see below) via env on the postgres StatefulSet.
   init.sh: |
     #!/bin/bash
     set -euo pipefail
@@ -51,30 +51,19 @@ data:
       GRANT ALL ON SCHEMA hansacore TO hansacore_api;
     EOSQL
 ---
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: postgres-pvc
-  namespace: hansacore
-spec:
-  accessModes:
-    - ReadWriteOnce
-  storageClassName: local-path
-  resources:
-    requests:
-      storage: 5Gi
----
+# One replica on the node's local-path volume (k3s local NVMe). Prod raises
+# shared_buffers and the memory limit in k8s/overlays/prod. 512MB of
+# shared_buffers needs a limit above that, so the base limit is 1Gi.
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: postgres
   namespace: hansacore
   labels:
     app: postgres
 spec:
+  serviceName: postgres
   replicas: 1
-  strategy:
-    type: Recreate
   selector:
     matchLabels:
       app: postgres
@@ -87,6 +76,17 @@ spec:
         - name: postgres
           image: postgres:16-alpine
           imagePullPolicy: IfNotPresent
+          args:
+            - -c
+            - shared_buffers=512MB
+            - -c
+            - effective_cache_size=2GB
+            - -c
+            - random_page_cost=1.1
+            - -c
+            - wal_sync_method=fdatasync
+            - -c
+            - work_mem=16MB
           ports:
             - containerPort: 5432
               name: postgres
@@ -120,10 +120,10 @@ spec:
           resources:
             requests:
               cpu: 100m
-              memory: 256Mi
+              memory: 512Mi
             limits:
               cpu: 500m
-              memory: 512Mi
+              memory: 1Gi
           readinessProbe:
             exec:
               command:
@@ -141,13 +141,20 @@ spec:
             initialDelaySeconds: 15
             periodSeconds: 10
       volumes:
-        - name: postgres-storage
-          persistentVolumeClaim:
-            claimName: postgres-pvc
         - name: init-script
           configMap:
             name: postgres-init-sql
             defaultMode: 0755
+  volumeClaimTemplates:
+    - metadata:
+        name: postgres-storage
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: local-path
+        resources:
+          requests:
+            storage: 5Gi
 ---
 apiVersion: v1
 kind: Service

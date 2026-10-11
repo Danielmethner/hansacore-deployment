@@ -12,8 +12,8 @@ resources:
 
 components:
   - ../../components/demo-data
-  # Postgres hostPath on the data disk, admin Ingress without BasicAuth.
-  - ../../components/gcp-vm
+  # Admin Ingress without BasicAuth. Postgres stays on local-path.
+  - ../../components/hetzner-vm
 
 configMapGenerator:
   - name: hansacore-env
