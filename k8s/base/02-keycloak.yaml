@@ -1,7 +1,7 @@
 # NOTE: KEYCLOAK_ADMIN_PASSWORD comes from the `keycloak-admin-secret` Secret,
 # generated per-overlay (see k8s/overlays/<env>/secrets/keycloak-admin.env.example).
 # Hostname/proxy values come from the `hansacore-env` ConfigMap, generated
-# per-overlay so the same base manifest works unchanged for local-vm and gcp.
+# per-overlay so the same base manifest works unchanged across environments.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

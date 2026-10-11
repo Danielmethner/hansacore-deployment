@@ -3,11 +3,11 @@
 # don't already exist. Safe to re-run — never overwrites existing files, so
 # rotating a secret is a matter of deleting the specific file and re-running.
 #
-# Usage: scripts/bootstrap-secrets.sh [overlay]   (default: local-vm)
+# Usage: scripts/bootstrap-secrets.sh [overlay]   (default: sit)
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." >/dev/null 2>&1 && pwd)"
-OVERLAY="${1:-local-vm}"
+OVERLAY="${1:-sit}"
 SECRETS_DIR="$DIR/k8s/overlays/$OVERLAY/secrets"
 mkdir -p "$SECRETS_DIR"
 

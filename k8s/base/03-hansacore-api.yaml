@@ -1,6 +1,6 @@
 # NOTE: KEYCLOAK_ISSUER_URI / CORS_ALLOWED_ORIGINS come from the `hansacore-env`
 # ConfigMap (generated per-overlay) so this base manifest never hardcodes a
-# specific VM IP/hostname. Same manifest works unchanged for local-vm and gcp.
+# specific VM IP/hostname. Same manifest works unchanged across environments.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

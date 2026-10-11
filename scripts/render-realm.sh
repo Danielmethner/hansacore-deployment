@@ -6,11 +6,11 @@
 # git-ignored (it contains rendered secret values) and referenced as a
 # Kustomize resource by that overlay's kustomization.yaml.
 #
-# Usage: scripts/render-realm.sh [overlay]   (default: local-vm)
+# Usage: scripts/render-realm.sh [overlay]   (default: sit)
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." >/dev/null 2>&1 && pwd)"
-OVERLAY="${1:-local-vm}"
+OVERLAY="${1:-sit}"
 KUBECTL="kubectl"
 command -v kubectl >/dev/null 2>&1 || KUBECTL="kubectl.exe"  # WSL Docker Desktop interop
 OVERLAY_DIR="$DIR/k8s/overlays/$OVERLAY"

@@ -2,13 +2,14 @@
 
 Infrastructure-as-Code and Kubernetes manifests for deploying the **HansaCore** platform on a single-node **k3s Kubernetes cluster**.
 
-The same base manifests run in four places; each has its own Kustomize overlay:
-1. **DEV (`overlays/local-vm`)**: an Ubuntu 24.04 VM via **Canonical Multipass** on Windows 11 Hyper-V (§3).
-2. **SIT (`overlays/sit`)**: a single **Hetzner Cloud** VM (`hansacore-sit`, `cx33`, Nuremberg) running k3s, provisioned with **Terraform** (`infra/`) and `scripts/manage-env.sh` (§8).
-3. **UAT (`overlays/uat`)**: the same shape as SIT (`hansacore-uat`, `cx33`) (§8).
-4. **PROD (`overlays/prod`)**: the same shape on a larger VM (`hansacore-prod`, `cx43`, 16 GB) (§8).
+The same base manifests deploy across three environments on **Hetzner Cloud**; each has its own Kustomize overlay:
+1. **SIT (`overlays/sit`)**: a single **Hetzner Cloud** VM (`hansacore-sit`, `cpx22`, Nuremberg) running k3s, provisioned with **Terraform** (`infra/hetzner/`) and `scripts/manage-env.sh` (§8). System Integration Testing sandbox.
+2. **UAT (`overlays/uat`)**: the same shape as SIT (`hansacore-uat`, `cpx22`) (§8).
+3. **PROD (`overlays/prod`)**: the same shape on a larger VM (`hansacore-prod`, `cpx32`, 8 GB RAM, 160 GB NVMe, automatic backups enabled) (§8).
 
-The old GCP Terraform is under `infra/gcp/` and is unused. The GCP project is shut down (§5, §7 are the old runbook).
+Local development runs directly via Docker Compose (`hansacore-portal/docker-compose.yml`) for Keycloak + Postgres, and your IDE / `hansacore-web/start-dev.ps1` for sub-second hot reload.
+
+The old GCP Terraform under `infra/gcp/` is obsolete.
 
 Deploying a change is `git pull`, optionally rebuild images, then `kubectl apply -k <overlay>`; see §5 ("Deploying changes") for the exact routine.
 
@@ -25,7 +26,7 @@ Pattern: `<env>.<app>.hansacore.com`; production has no environment label.
 | PROD | `hansacore.com` | `erp.hansacore.com` | `auth.hansacore.com` |
 | UAT (Hetzner, `overlays/uat`) | `uat.hansacore.com` | `uat.erp.hansacore.com` | `uat.auth.hansacore.com` |
 | SIT (Hetzner, `overlays/sit`) | `sit.hansacore.com` | `sit.erp.hansacore.com` | `sit.auth.hansacore.com` |
-| DEV (Multipass, `overlays/local-vm`) | `dev.hansacore.com` | `dev.erp.hansacore.com` | `dev.auth.hansacore.com` |
+| Local Dev (Docker Compose + IDE) | `localhost:8080` (Gateway) | `localhost:4200` | `localhost:8082` |
 
 One login for all app hosts: each app host has its own host-only gateway
 session (`PORTAL_SESSION`), and single sign-on between them comes from
@@ -80,7 +81,7 @@ portal sub-apps go under the portal host as subpaths.
 | **`portal-gateway`** | Spring Cloud Gateway / BFF | `8080` | Secure session gateway, OAuth2 token relay, and reverse proxy |
 | **`hansacore-web`** | Angular 20 SPA / Nginx | `80` | ERP frontend, on the ERP host |
 | **`portal-placeholder`** | Nginx + static page (ConfigMap) | `80` | Stand-in for the portal frontend on the portal host; shows the sign-in state |
-| **`traefik`** | Traefik Ingress Controller | `80 / 443` | Reverse proxy, TLS termination, HTTPS redirect, security headers, admin BasicAuth (DEV only) |
+| **`traefik`** | Traefik Ingress Controller | `80 / 443` | Reverse proxy, TLS termination, HTTPS redirect, and security headers |
 
 All JVM services (`keycloak`, `hansacore-api`, `portal-gateway`) have a **`startupProbe`**
 in base. Their cold start is slow (Keycloak's non-optimized `start` runs a ~70 s
@@ -124,11 +125,6 @@ hansacore-deployment/
 │   │   ├── gcp-vm/                     # legacy GCP hostPath patches; do not use
 │   │   └── hetzner-vm/                 # sit + uat + prod: admin Ingress without BasicAuth
 │   └── overlays/
-│       ├── local-vm/                   # DEV: Multipass VM target
-│       │   ├── kustomization.yaml          # Ingress host patches, api profile `dev`
-│       │   ├── dev-ca-trust.patch.yaml     # DEV-only CA truststore for api + gateway
-│       │   ├── hansacore-env.properties    # this env's hostnames / issuer / CORS
-│       │   └── secrets/*.env.example       # templates; real .env files are git-ignored
 │       ├── sit/                        # SIT: Hetzner VM (hansacore-sit)
 │       │   ├── kustomization.yaml          # host patches, api profile `sit`, hetzner-vm component
 │       │   ├── 04-cert-issuers.yaml        # cert-manager ClusterIssuers (LE staging + prod)
@@ -151,14 +147,7 @@ hansacore-deployment/
 │   ├── render-realm.sh                 # renders the realm template -> per-overlay ConfigMap
 │   ├── build-images.sh                 # builds the :local images on the VM (all envs)
 │   ├── bootstrap-vm.sh                 # old GCP VM bootstrap (data disk, repos, cert-manager)
-│   ├── manage-env.sh                   # Hetzner: status, deploy, build, logs, db-shell (§8)
-│   └── rebuild-local-db.ps1            # DEV: drops the hansacore schema and re-seeds
-├── ssl/                                 # TLS Certificate & Java Truststore automation
-│   └── generate-certs.sh               # DEV only; reuses the CA, certs for the dev.* hosts
-├── vm/                                  # LOCAL MULTIPASS DEV CLUSTER ONLY
-│   ├── coredns-custom.yaml             # pods resolve the dev.* names to Traefik
-│   ├── update-hosts.ps1                # Windows hosts file entries for the dev.* names
-│   └── node-ip-guard/                  # heals k3s + CoreDNS after VM IP changes
+│   └── manage-env.sh                   # Hetzner: status, deploy, build, logs, db-shell (§8)
 ├── .gitignore
 └── README.md
 ```
@@ -168,19 +157,19 @@ environment-specific lives in exactly one place per environment:
 `k8s/overlays/<env>/hansacore-env.properties` (hostnames/CORS/issuer, plus
 the matching Ingress host patches in that overlay's `kustomization.yaml`) and
 `k8s/overlays/<env>/secrets/*.env` (passwords/client secrets, git-ignored).
-That's what makes the local Multipass VM and the Hetzner VMs usable from
+That's what makes the Hetzner VMs usable from
 the same base manifests.
 
 ### API profiles, truststore and demo data
 
 The same `hansacore-api` image runs everywhere; the overlay decides how.
 
-| | DEV (`local-vm`) | SIT / UAT / PROD |
-| :--- | :--- | :--- |
-| `SPRING_PROFILES_ACTIVE` (api only) | `dev` (smoke tests run) | `sit` / `uat` / `prod` (Swagger off) |
-| Custom CA truststore | yes, `dev-ca-trust.patch.yaml` | no, JVM default (public certs) |
-| Demo tenants/users | `components/demo-data` | `components/demo-data` |
-| `HANSACORE_DEMODATA_ENABLED` | `true` | `true` (for now) |
+| Environment | Active Spring Profile | Truststore | Demo Data Component |
+| :--- | :--- | :--- | :--- |
+| **Local Dev** | `dev` (in IDE / local properties) | Standard JVM | Local seed |
+| **SIT** | `sit` | Standard JVM (Let's Encrypt) | `components/demo-data` |
+| **UAT** | `uat` | Standard JVM (Let's Encrypt) | `components/demo-data` |
+| **PROD** | `prod` (Swagger off) | Standard JVM (Let's Encrypt) | None (clean DB) |
 
 - **No hidden default profile.** `application.properties` doesn't set one, so
   the profile always comes from the overlay (or `-Dspring-boot.run.profiles=dev`
@@ -191,10 +180,6 @@ The same `hansacore-api` image runs everywhere; the overlay decides how.
   the git-ignored `application-dev.properties` (and `-local`, `-forty2`,
   `vpn_templates/`, `demo-data-local.yml`) out of the build context. In the
   cluster, datasource, issuer and CORS always come from env.
-- **Truststore is DEV-only.** `ssl/generate-certs.sh` creates the
-  `hansacore-ca-trust` Secret; only the local-vm overlay mounts it and sets
-  `JAVA_TOOL_OPTIONS`. Heap flags live in `JDK_JAVA_OPTIONS` in base, so
-  they're kept on both environments.
 - **Seeding switch.** On a fresh database the API always creates the system
   users and roles, plus reference data (currencies, countries, DAX40). With
   `HANSACORE_DEMODATA_ENABLED=true` it also seeds the tenants/users from
@@ -207,91 +192,47 @@ The same `hansacore-api` image runs everywhere; the overlay decides how.
 
 ---
 
-## 3. Quick Start (Local k3s / Multipass)
+## 3. Quick Start (Local Development & Remote Deployment)
 
-### Prerequisites
-- Canonical Multipass installed on Windows (`multipass`)
-- Hyper-V enabled (`Microsoft-Hyper-V`)
-- An Ubuntu 24.04 VM (`k3s-lab`) with k3s installed
-- `kubectl` and a bash shell (Git Bash on Windows is fine) on your host
-- `openssl` on your host (Git Bash ships one)
+### Local Development Loop (Inner Loop)
+Local development runs without Kubernetes for instant sub-second hot-reloading:
 
-### Deployment Steps
-
-1. **Generate secrets** (one-time; safe to re-run, never overwrites existing files):
+1. **Start database and identity dependencies**:
+   Run Docker Compose from `hansacore-portal`:
    ```bash
-   scripts/bootstrap-secrets.sh local-vm
+   cd hansacore-portal
+   docker compose up -d
    ```
-   This writes git-ignored files under `k8s/overlays/local-vm/secrets/` (DB
-   passwords, Keycloak admin password, OAuth2 client secrets, the seeded
-   demo users' bootstrap password, and an htpasswd file for the `/admin`
-   BasicAuth prompt). **Save the printed BasicAuth password** — it's not
-   stored anywhere else.
+   This spins up:
+   - PostgreSQL (`hansacore` DB on `:5432`, `keycloak` DB on `:5433`)
+   - Keycloak 24 IAM on `http://localhost:8082`
 
-2. **Render the Keycloak realm import** for this overlay (must be re-run any
-   time `identity/portal-realm.template.json` or the overlay's hostname/
-   secrets change):
-   ```bash
-   scripts/render-realm.sh local-vm
-   ```
+2. **Launch applications**:
+   - `hansacore-api`: Run via IDE or `mvnw spring-boot:run -Dspring-boot.run.profiles=dev` (`http://localhost:8081`).
+   - `portal-gateway`: Run via IDE or `mvnw spring-boot:run -Dspring-boot.run.profiles=dev` (`http://localhost:8080`).
+   - `hansacore-web`: Run `npx ng serve --port 4200` (`http://localhost:4200`).
+   *(Alternatively, run `hansacore-web/start-dev.ps1` to launch all services in dedicated terminal windows).*
 
-3. **Generate TLS certificates & Java truststore** (inside the VM):
-   ```bash
-   sudo bash /home/ubuntu/hansacore/hansacore-deployment/ssl/generate-certs.sh
-   ```
-   This automatically:
-   - Creates the Root CA on the first run and reuses it afterwards (delete `ssl/ca.key`/`ssl/ca.crt` to force a new one).
-   - Issues a server certificate for the three hostnames in `k8s/overlays/local-vm/hansacore-env.properties` (plus `localhost` and the VM IP).
-   - Exports the Root CA into a Java PKCS12 truststore (`truststore.p12`), protected by a randomly generated password (not the well-known "changeit" default); only rebuilt when the CA changes.
-   - Creates the `hansacore-tls` and `hansacore-ca-trust` Kubernetes secrets in namespace `hansacore`.
+### Remote Environments (SIT, UAT, PROD)
+Remote environments run on Hetzner Cloud and are managed via `scripts/manage-env.sh`:
+```bash
+# Check status of cluster pods, ingress, and nodes
+bash scripts/manage-env.sh status sit
 
-   **Name resolution for the `dev.*` hostnames** (they are not in public DNS):
-   ```bash
-   # pods (gateway/API -> Keycloak): answer the names with Traefik's ClusterIP
-   kubectl apply -f vm/coredns-custom.yaml
-   kubectl -n kube-system rollout restart deploy/coredns
-   ```
-   ```powershell
-   # Windows browser: elevated PowerShell, re-run after every VM IP change
-   .\vm\update-hosts.ps1
-   ```
+# Deploy all changes (pulls repos, builds images, applies overlay, restarts pods)
+bash scripts/manage-env.sh deploy sit
 
-4. **Build the images and import them into k3s** (inside the VM, from the
-   repo mount; re-run for a component whenever its code changes):
-   ```bash
-   bash /home/ubuntu/hansacore/hansacore-deployment/scripts/build-images.sh [api|gateway|web ...]
-   ```
+# Build and restart a specific component
+bash scripts/manage-env.sh build sit api       # api | gateway | web
 
-5. **Apply everything** via Kustomize:
-   ```bash
-   kubectl apply -k k8s/overlays/local-vm
-   ```
-   Kustomize handles the namespace and the generated ConfigMaps/Secrets.
-   Re-run this command after every `git pull` (see §5).
+# View live service logs
+bash scripts/manage-env.sh logs sit api        # api | gateway | web | keycloak | postgres
+```
 
-6. **Verify all pods are running:**
-   ```bash
-   kubectl get pods -n hansacore
-   ```
-
-7. **Browse to `https://dev.erp.hansacore.com`** (ERP) or
-   `https://dev.hansacore.com` (portal placeholder). Log in with one of the seeded users
-   (`consultant`, `daniel.methner@forty2.ch`, `milad.g@forty2.ch`,
-   `technical_user@hansacore.com`) using the `SEED_USER_PASSWORD` value from
-   `k8s/overlays/local-vm/secrets/seed-users.env` — you'll be prompted to
-   set a real password on first login (`temporary: true` on those
-   credentials forces this).
-
-### Rotating a secret
-
-Delete the specific file under `k8s/overlays/local-vm/secrets/`, re-run
-`scripts/bootstrap-secrets.sh local-vm` (only regenerates what's missing),
-then `scripts/render-realm.sh local-vm` and `kubectl apply -k
-k8s/overlays/local-vm` again. For Postgres/Keycloak-admin passwords that
-already exist in the running database, you'll also need to `ALTER USER ...
-PASSWORD ...` / update the admin password via `kcadm` — changing the Secret
-alone doesn't retroactively change a password already set inside Postgres
-or Keycloak's own DB.
+### Rotating a secret on SIT / UAT / PROD
+Delete the specific file under `k8s/overlays/<env>/secrets/`, re-run
+`scripts/bootstrap-secrets.sh <env>` (only regenerates what's missing),
+then `scripts/render-realm.sh <env>` and `kubectl apply -k k8s/overlays/<env>`.
 
 ---
 
@@ -447,11 +388,10 @@ empty directory.
 ## 6. Maintenance & Troubleshooting
 
 ### Reset Keycloak Database & Re-import Realm
-If `identity/portal-realm.template.json` is updated (shown for DEV; use `sit`
-and `k8s/overlays/sit` for SIT, or `uat` and `k8s/overlays/uat` for UAT):
+If `identity/portal-realm.template.json` is updated (shown for SIT; use `uat` or `prod` for other environments):
 ```bash
 # 1. Re-render the ConfigMap for your overlay
-scripts/render-realm.sh local-vm
+scripts/render-realm.sh sit
 
 # 2. Reset keycloak database in postgres
 kubectl exec -n hansacore sts/postgres -- psql -U postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'keycloak' AND pid <> pg_backend_pid();"
@@ -459,56 +399,16 @@ kubectl exec -n hansacore sts/postgres -- psql -U postgres -c "DROP DATABASE IF 
 kubectl exec -n hansacore sts/postgres -- psql -U postgres -c "CREATE DATABASE keycloak OWNER keycloak;"
 
 # 3. Re-apply and restart
-kubectl apply -k k8s/overlays/local-vm
+kubectl apply -k k8s/overlays/sit
 kubectl rollout restart deploy/keycloak -n hansacore
 ```
-
-### VM IP Changes (Host Sleep / Reboot / Network Switch) — DEV only
-
-The Multipass VM gets its IP via DHCP from Hyper-V's Default Switch, which
-Windows recreates whenever the host sleeps, reboots, or changes networks —
-the VM IP *will* change regularly (several times observed within two days).
-k3s pins the node IP at startup, so after a renumber the cluster keeps
-serving the stale address: pod DNS/egress breaks or crawls, and
-server-to-server calls (notably Keycloak → Microsoft during SSO) time out
-with generic error pages. Inside the cluster the `dev.*` names resolve to
-Traefik's ClusterIP (`vm/coredns-custom.yaml`), so they are unaffected; on
-Windows re-run `vm/update-hosts.ps1` (elevated) so the browser follows the
-new IP.
-
-Fast diagnosis — these two must agree:
-```bash
-multipass info k3s-lab          # real VM IP
-kubectl get nodes -o wide       # INTERNAL-IP as k3s sees it
-```
-
-Recovery is one command (also re-establishes the repo file mount if it died):
-```bash
-multipass restart k3s-lab
-```
-
-Without a VM restart, recover in place — both steps are needed, because the
-CoreDNS pod keeps forwarding to the old Hyper-V DNS server it copied at start:
-```bash
-sudo systemctl restart k3s
-kubectl rollout restart deploy/coredns -n kube-system
-```
-
-A `k3s-node-ip-guard` systemd timer installed in the VM (see
-`vm/node-ip-guard/`, LOCAL DEV CLUSTER ONLY — staging/production use static
-IPs where renumbering cannot happen) performs this check automatically and,
-on confirmed persistent drift, restarts k3s and then CoreDNS. Install it with
-`sudo bash /home/ubuntu/hansacore/hansacore-deployment/vm/node-ip-guard/install.sh`. Inspect with
-`journalctl -u k3s-node-ip-guard.service` and dry-run with
-`sudo /usr/local/bin/k3s-node-ip-guard.sh --dry-run`.
 
 ### Checking Health & Logs
 ```bash
 # Gateway health (actuator is not exposed on the public ingress)
 kubectl exec -n hansacore deploy/portal-gateway -- wget -qO- http://localhost:8080/actuator/health
 
-# Keycloak OIDC Discovery (DEV uses a private CA, hence -k; SIT has a trusted certificate)
-curl -k https://dev.auth.hansacore.com/realms/portal/.well-known/openid-configuration
+# Keycloak OIDC Discovery (SIT has a trusted Let's Encrypt certificate)
 curl https://sit.auth.hansacore.com/realms/portal/.well-known/openid-configuration
 
 # Service logs (-f follows; --previous shows the container before the last restart)
@@ -533,7 +433,6 @@ kubectl describe pod -n hansacore -l app=keycloak
 | Keycloak gets OOMKilled (exit code 137) during startup | Keycloak 24's Quarkus augmentation and realm import require at least 1024Mi memory request and 2048Mi limit (configured in `k8s/base/02-keycloak.yaml`). |
 | Pods restart 1-5 times on a cold boot | On a 2-vCPU machine, CPU contention during initial JVM startup and realm import can cause startup probe delays or transient dependency timeouts (e.g. `portal-gateway` waiting for Keycloak to serve discovery metadata). This is normal; pods recover automatically once upstream services report ready. |
 | Postgres comes back empty after a VM restart | On the old GCP VM, the data disk was not mounted (`nofail`) and Postgres started on the boot disk. Check `findmnt /mnt/disks/postgres-data`, fix the mount, then restart the postgres pod. On Hetzner the data is the StatefulSet volume `postgres-storage-postgres-0` on the server's local disk (`/var/lib/rancher/k3s/storage`). That disk is deleted with the server. |
-| Local-vm Postgres looks empty after the StatefulSet change | The claim is now `postgres-storage-postgres-0`. An older `postgres-pvc` is not mounted. Re-seed, or copy the data directory across and delete the old claim. |
 
 ### Changing hostnames on a running cluster
 The realm import only runs on an empty Keycloak database, so after changing
