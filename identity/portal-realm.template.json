@@ -2545,70 +2545,15 @@
   },
   "users": [
     {
-      "id": "7ea410cd-1f44-44c6-9621-4c223fd9da38",
-      "username": "consultant",
-      "email": "consultant@hansacore.com",
-      "firstName": "Hansa",
-      "lastName": "Consultant",
-      "enabled": true,
-      "emailVerified": true,
-      "credentials": [
-        {
-          "type": "password",
-          "value": "__SEED_USER_PASSWORD__",
-          "temporary": true
-        }
-      ],
-      "realmRoles": [
-        "default-roles-portal"
-      ]
-    },
-    {
-      "id": "e980cda0-5a2f-4260-99e5-d861eea5aab7",
-      "username": "daniel.methner@forty2.ch",
-      "email": "daniel.methner@forty2.ch",
+      "username": "daniel.methner.admin@hansacore.com",
+      "email": "daniel.methner.admin@hansacore.com",
       "firstName": "Daniel",
       "lastName": "Methner",
       "enabled": true,
       "emailVerified": true,
-      "credentials": [
-        {
-          "type": "password",
-          "value": "__SEED_USER_PASSWORD__",
-          "temporary": true
-        }
+      "requiredActions": [
+        "CONFIGURE_TOTP"
       ],
-      "realmRoles": [
-        "default-roles-portal"
-      ]
-    },
-    {
-      "id": "1f3dc46e-964b-48c6-bd6f-605687bdf6c8",
-      "username": "milad.g@forty2.ch",
-      "email": "milad.g@forty2.ch",
-      "firstName": "Milad",
-      "lastName": "G",
-      "enabled": true,
-      "emailVerified": true,
-      "credentials": [
-        {
-          "type": "password",
-          "value": "__SEED_USER_PASSWORD__",
-          "temporary": true
-        }
-      ],
-      "realmRoles": [
-        "default-roles-portal"
-      ]
-    },
-    {
-      "id": "90d79d1d-7d1b-4208-a698-15c83740edfd",
-      "username": "technical_user@hansacore.com",
-      "email": "technical_user@hansacore.com",
-      "firstName": "Daniel",
-      "lastName": "Methner",
-      "enabled": true,
-      "emailVerified": true,
       "credentials": [
         {
           "type": "password",

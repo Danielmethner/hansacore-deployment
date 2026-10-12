@@ -188,19 +188,19 @@ re-run. It needs `jq`; the theme step needs the image from step 3.
 
 ## 6. Seed user, then smoke test
 
-A running realm keeps the values it was first imported with. The seed user
-`daniel.methner@forty2.ch` is still `emailVerified=false` there and the API
-rejects it. In the Keycloak admin console: *Users* → `daniel.methner@forty2.ch`
-→ switch **Email verified** on → *Save*. (`consultant@hansacore.com` is
-already verified.) Operator accounts are created the same way, always with
-**Email verified** on; see `README.md` §4.
+A running realm keeps the values it was first imported with. The only seeded
+local user is the god account `daniel.methner.admin@hansacore.com` (password plus
+one-time code); Forty2 staff and the operator account sign in with Microsoft. If
+the realm predates this, create the god account by hand with **Email verified**
+on, a temporary password and the required action *Configure OTP*; see
+`README.md` §4.
 
 | # | Action | Expected |
 |---|--------|----------|
 | 1 | Sign in with a Forty2 Entra work account | Recognised as Forty2. An existing user with the same email is linked; a new colleague lands in Forty2's quarantine and waits for approval |
 | 2 | Register on the Keycloak page with a private address (e.g. outlook.com) | Verification email arrives; after verifying, `/onboarding` offers a personal workspace only |
 | 3 | Log in locally without verifying the email | Rejected: "Email address is not verified" |
-| 4 | `consultant@hansacore.com` logs in with username and password | Works as before, operator permissions intact |
+| 4 | `daniel.methner.admin@hansacore.com` logs in with password and one-time code | Sees and can change every tenant's data |
 | 5 | Sign in with a personal Microsoft account (outlook.com) through the Microsoft button | Rejected: "Personal Microsoft accounts are not supported" |
 | 6 | Admin creates an invite code, a new user redeems it | Request appears in Access Requests |
 

@@ -357,19 +357,51 @@ transaction, can be repeated, and refuses a directory or domain that already
 belongs to another customer, personal Microsoft accounts, free-mail domains and
 reserved domains.
 
-### HansaCore operator accounts
-HansaCore staff have no identity provider. They are local Keycloak users in the
-`portal` realm, never self-registered, and they belong to the global operator
-tenant (`ETenant.MASTER`):
-- Create them in the Keycloak admin console (Users → *Add user*) with **Email
-  verified** switched on and a temporary password. An unverified email is
-  rejected by the API at first sign-in.
+On DEV and SIT the demo data registers Forty2 itself (`idp-directory` and
+`domains` of the `FORTY2` tenant in the demo-data YAML), so the script is only
+needed for UAT and PROD.
+
+### HansaCore accounts
+HansaCore staff belong to the global operator tenant (`ETenant.MASTER`). The API
+creates their users and roles on every start from
+`hansacore-api/src/main/resources/platform-accounts.yml`; a role changed there
+is applied at the next start. There are three access levels:
+
+| Level | Role | Can change |
+| :--- | :--- | :--- |
+| Investigation | none (every other global user) | nothing, read-only |
+| Operator | `ROLE.PLATFORM_OPERATOR` | shared reference data (PUBLIC tenant) and every customer's tenant administration; customer data is read-only |
+| God | `ROLE.PLATFORM_GOD` | everything |
+
+Current accounts (identical on DEV and SIT, which share one Keycloak):
+- `daniel.methner@hansacore.com`, operator. Signs in with **Microsoft** through
+  HansaCore's own Entra directory, which enforces Authenticator MFA. In Entra the
+  user needs its *Email* field set (Users → user → *Properties* → *Contact
+  information*), otherwise Microsoft sends no email and the sign-in is refused.
+- `daniel.methner.admin@hansacore.com`, god. A local Keycloak user (password and
+  one-time code, seeded by `identity/portal-realm.template.json`). Create further
+  local accounts in the Keycloak admin console (Users → *Add user*) with **Email
+  verified** on, a temporary password and the required action *Configure OTP*.
+
+To add a person: add an entry to `platform-accounts.yml` and give them a Microsoft
+account in HansaCore's Entra (operator) or a local Keycloak user (god).
 - The email domain `hansacore.com` is reserved (`hansacore.onboarding.reserved-domains`,
   comma list, default `hansacore.com`): no customer can register it, be matched
   by it, or claim it at `/onboarding`.
-- Operator staff are matched to their `EUser` row by the verified email, as before.
-  System users (`technical_user@`, `intf_watsonx@`, `public_user@`, `investigation@`)
-  are never signed in through Keycloak by a person.
+- System users (`technical_user@`, `intf_watsonx@`, `public_user@`, `investigation@`)
+  are never signed in by a person and have no Keycloak account.
+
+### Demo users (DEV and SIT only)
+The Forty2 demo users are the real Forty2 Microsoft accounts from `Data/UsersDEV.csv`
+(an Entra export), so Forty2 staff sign in with Microsoft and land in their own
+country company. After a new export, regenerate the users in the demo-data YAML and
+copy the file to the server (§8):
+```powershell
+.\scripts\demo-users-from-csv.ps1 -Csv ..\Data\UsersDEV.csv -Yaml ..\hansacore-api\demo-data-local.yml
+```
+Demo data is loaded only into an empty database. To compare two environments run
+`scripts/check-user-setup.sql` on both (`psql -U postgres -d hansacore -f ...`);
+an equal `user_setup_fingerprint` means the same users, home tenants and roles.
 
 ### Local Windows Trust (Green Padlock)
 To trust the local Certificate Authority on your Windows host:
