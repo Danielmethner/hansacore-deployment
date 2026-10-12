@@ -404,7 +404,7 @@ Who signed in, when and with what outcome is in two places, both plain log lines
   `LOGOUT`, `LOGIN_ERROR`, `REGISTER`, `IDENTITY_PROVIDER_LOGIN` and password or one-time-code
   change, with user, client, IP address and the identity provider used. Enabled in the realm
   (`eventsEnabled`, 30 days also visible under *Events* in the admin console) and by
-  `KC_SPI_EVENTS_LISTENER_JBOSS_LOGGING_SUCCESS_LEVEL=info` in `k8s/base/02-keycloak.yaml`.
+  `KC_LOG_LEVEL=info,org.keycloak.events:debug` (successes are debug-level events) in `k8s/base/02-keycloak.yaml`.
   Running realms get it from `scripts/apply-realm-sso-onboarding.sh`.
 - **API** (`kubectl -n hansacore logs deploy/hansacore-api | grep -E 'Session resolved|Sign-in rejected|Linking identity|no selectable tenant'`):
   `Session resolved` says where each person landed (ACTIVE, ONBOARDING or PENDING_APPROVAL)
