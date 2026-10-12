@@ -8,8 +8,12 @@ ENV KC_DB=postgres
 ENV KC_HEALTH_ENABLED=true
 ENV KC_METRICS_ENABLED=false
 
-COPY themes/hansacore /opt/keycloak/themes/hansacore
-RUN /opt/keycloak/bin/kc.sh build
+# Keycloak runs as uid 1000. Own the theme explicitly and make it readable,
+# otherwise it depends on the umask of whichever machine builds the image and
+# Keycloak fails with "Template not found" (permission denied) at login.
+COPY --chown=1000:0 themes/hansacore /opt/keycloak/themes/hansacore
+RUN chmod -R u+rwX,go+rX /opt/keycloak/themes/hansacore \
+ && /opt/keycloak/bin/kc.sh build
 
 FROM quay.io/keycloak/keycloak:24.0
 COPY --from=builder /opt/keycloak/ /opt/keycloak/

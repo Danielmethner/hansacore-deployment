@@ -51,6 +51,23 @@ kc config credentials --server http://localhost:8080 --realm master \
 
 MS=https://login.microsoftonline.com
 
+SMTP_ARGS=()
+if [ -n "$SMTP_HOST" ] && [[ "$SMTP_HOST" != PASTE_* ]]; then
+  SMTP_ARGS=(
+    -s "smtpServer.host=$SMTP_HOST"
+    -s "smtpServer.port=${SMTP_PORT:-587}"
+    -s "smtpServer.from=$SMTP_FROM"
+    -s smtpServer.fromDisplayName=HansaCore
+    -s smtpServer.auth=true
+    -s "smtpServer.user=$SMTP_USER"
+    -s "smtpServer.password=$SMTP_PASSWORD"
+    -s smtpServer.starttls=true
+    -s smtpServer.ssl=false
+  )
+else
+  echo "    (SMTP not configured in keycloak-smtp.env - leaving the realm's mail settings unchanged)"
+fi
+
 echo "==> Realm: self-registration, email verification, password policy, SMTP"
 kc update "realms/$REALM" \
   -s displayName=HansaCore \
@@ -64,15 +81,7 @@ kc update "realms/$REALM" \
   -s internationalizationEnabled=true \
   -s 'supportedLocales=["en","de"]' \
   -s defaultLocale=en \
-  -s "smtpServer.host=$SMTP_HOST" \
-  -s "smtpServer.port=${SMTP_PORT:-587}" \
-  -s "smtpServer.from=$SMTP_FROM" \
-  -s smtpServer.fromDisplayName=HansaCore \
-  -s smtpServer.auth=true \
-  -s "smtpServer.user=$SMTP_USER" \
-  -s "smtpServer.password=$SMTP_PASSWORD" \
-  -s smtpServer.starttls=true \
-  -s smtpServer.ssl=false
+  ${SMTP_ARGS[@]+"${SMTP_ARGS[@]}"}
 
 if kc get serverinfo | jq -e '.themes.login[] | select(.name == "hansacore")' >/dev/null; then
   echo "==> Realm: HansaCore login and email theme"

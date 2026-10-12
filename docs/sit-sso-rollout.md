@@ -113,7 +113,28 @@ bash scripts/manage-env.sh deploy sit          # pulls repos, builds images, ren
 bash scripts/manage-env.sh build sit keycloak  # rebuilds the theme image and restarts Keycloak
 ```
 
-The onboarding changelog (`14_tenant_domain_and_onboarding.xml`) was edited in
+**SIT status (checked 12 Oct 2026):** changelog 14 has never run there (no
+`tenant_domain` or other onboarding tables, no `databasechangelog` row), so the
+database reset below is **not needed on SIT**. The server also had no git clones
+(the four repos had been copied by hand) and no `jq`; set both up first:
+```bash
+cd /root/hansacore
+for r in hansacore-deployment hansacore-api hansacore-web hansacore-portal; do mv $r $r.old; done
+git config --global credential.helper store
+git clone https://github.com/Danielmethner/hansacore-deployment.git
+git clone https://github.com/Danielmethner/hansacore-api.git
+git clone https://github.com/Danielmethner/hansacore-web.git
+git clone https://github.com/Danielmethner/hansacore-portal.git
+# git-ignored files the server needs
+cp -an hansacore-deployment.old/k8s/overlays/sit/secrets/. hansacore-deployment/k8s/overlays/sit/secrets/
+cp -an hansacore-deployment.old/k8s/components/demo-data/demo-data.yml hansacore-deployment/k8s/components/demo-data/
+cp -an hansacore-api.old/src/main/resources/vpn_templates hansacore-api/src/main/resources/
+apt-get install -y jq
+bash hansacore-deployment/scripts/bootstrap-secrets.sh sit   # adds the SMTP placeholder file
+```
+
+For UAT and PROD, or any environment where an older version of changelog 14 may
+have run: the changelog (`14_tenant_domain_and_onboarding.xml`) was edited in
 place before it had ever been deployed. Liquibase keeps a fingerprint of every
 script it has run; if SIT already ran an older version the API refuses to start
 (checksum error). SIT holds only test data, so the simplest fix is to wipe the
