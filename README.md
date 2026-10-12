@@ -365,7 +365,8 @@ needed for UAT and PROD.
 HansaCore staff belong to the global operator tenant (`ETenant.MASTER`). The API
 creates their users and roles on every start from
 `hansacore-api/src/main/resources/platform-accounts.yml`; a role changed there
-is applied at the next start. There are three access levels:
+is applied at the next start, and a user removed from it loses its platform role.
+There are three access levels:
 
 | Level | Role | Can change |
 | :--- | :--- | :--- |
@@ -374,10 +375,16 @@ is applied at the next start. There are three access levels:
 | God | `ROLE.PLATFORM_GOD` | everything |
 
 Current accounts (identical on DEV and SIT, which share one Keycloak):
-- `daniel.methner@hansacore.com`, operator. Signs in with **Microsoft** through
-  HansaCore's own Entra directory, which enforces Authenticator MFA. In Entra the
-  user needs its *Email* field set (Users → user → *Properties* → *Contact
-  information*), otherwise Microsoft sends no email and the sign-in is refused.
+- `daniel.methner@danielmethneroutlook.onmicrosoft.com`, operator. Signs in with
+  **Microsoft** through HansaCore's own Entra directory (tenant
+  `3d1546c1-dba0-477e-b1e4-e8c9a004e395`, also home of the `HansaCore Login` app),
+  which enforces Authenticator MFA. In Entra the user needs its *Email* field set
+  (Users → user → *Properties* → *Contact information*), otherwise Microsoft sends
+  no email and the sign-in is refused. `hansacore.com` cannot be added to this
+  directory: it is verified in an older Microsoft directory (tenant
+  `113c7d0f-04fa-46f8-884c-37fadc7fd433`, account `daniel.methner@hansacore.com`)
+  that cannot be signed in to since its MFA device was lost. Moving the domain
+  needs Microsoft support (admin recovery with DNS proof) or that access back.
 - `daniel.methner.admin@hansacore.com`, god. A local Keycloak user (password and
   one-time code, seeded by `identity/portal-realm.template.json`). Create further
   local accounts in the Keycloak admin console (Users → *Add user*) with **Email
