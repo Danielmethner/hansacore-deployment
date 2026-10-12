@@ -15,6 +15,7 @@ SELECT u.email, t.name AS home_tenant,
          WHERE m.user_id = u.id AND m.tenant_role <> 'MEMBER') AS admin_rights
   FROM hansacore.obj_user u JOIN hansacore.obj_base b ON b.id = u.id JOIN hansacore.obj_base t ON t.id = b.obj_br_tenant_id
  WHERE u.email ILIKE '%hansacore.com'
+    OR b.obj_br_tenant_id = '00000000-0000-0000-0000-000000000000'
     OR EXISTS (SELECT 1 FROM hansacore.tenant_membership m WHERE m.user_id = u.id AND m.tenant_role <> 'MEMBER')
  ORDER BY 2, 1;
 SELECT t.name AS tenant, d.domain_name, d.status, d.is_primary

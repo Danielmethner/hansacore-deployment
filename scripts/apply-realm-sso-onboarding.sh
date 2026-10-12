@@ -83,6 +83,15 @@ kc update "realms/$REALM" \
   -s defaultLocale=en \
   ${SMTP_ARGS[@]+"${SMTP_ARGS[@]}"}
 
+echo "==> Realm: sign-in audit events (30 days, written to the Keycloak log)"
+kc update "realms/$REALM" \
+  -s eventsEnabled=true \
+  -s eventsExpiration=2592000 \
+  -s 'eventsListeners=["jboss-logging"]' \
+  -s 'enabledEventTypes=["LOGIN","LOGIN_ERROR","LOGOUT","LOGOUT_ERROR","REGISTER","REGISTER_ERROR","IDENTITY_PROVIDER_FIRST_LOGIN","IDENTITY_PROVIDER_LOGIN","IDENTITY_PROVIDER_LOGIN_ERROR","IDENTITY_PROVIDER_POST_LOGIN","IDENTITY_PROVIDER_LINK_ACCOUNT","UPDATE_PASSWORD","UPDATE_PASSWORD_ERROR","UPDATE_TOTP","REMOVE_TOTP","RESET_PASSWORD","RESET_PASSWORD_ERROR","VERIFY_EMAIL","CODE_TO_TOKEN_ERROR","REFRESH_TOKEN_ERROR","USER_DISABLED_BY_PERMANENT_LOCKOUT","USER_DISABLED_BY_TEMPORARY_LOCKOUT"]' \
+  -s adminEventsEnabled=true \
+  -s adminEventsDetailsEnabled=false
+
 if kc get serverinfo | jq -e '.themes.login[] | select(.name == "hansacore")' >/dev/null; then
   echo "==> Realm: HansaCore login and email theme"
   kc update "realms/$REALM" -s loginTheme=hansacore -s emailTheme=hansacore

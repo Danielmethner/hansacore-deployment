@@ -398,6 +398,20 @@ account in HansaCore's Entra (operator) or a local Keycloak user (god).
 - System users (`technical_user@`, `intf_watsonx@`, `public_user@`, `investigation@`)
   are never signed in by a person and have no Keycloak account.
 
+### Sign-in audit log
+Who signed in, when and with what outcome is in two places, both plain log lines:
+- **Keycloak** (`kubectl -n hansacore logs deploy/keycloak | grep type=`): every `LOGIN`,
+  `LOGOUT`, `LOGIN_ERROR`, `REGISTER`, `IDENTITY_PROVIDER_LOGIN` and password or one-time-code
+  change, with user, client, IP address and the identity provider used. Enabled in the realm
+  (`eventsEnabled`, 30 days also visible under *Events* in the admin console) and by
+  `KC_SPI_EVENTS_LISTENER__JBOSS_LOGGING__SUCCESS_LEVEL=info` in `k8s/base/02-keycloak.yaml`.
+  Running realms get it from `scripts/apply-realm-sso-onboarding.sh`.
+- **API** (`kubectl -n hansacore logs deploy/hansacore-api | grep -E 'Session resolved|Sign-in rejected|Linking identity|no selectable tenant'`):
+  `Session resolved` says where each person landed (ACTIVE, ONBOARDING or PENDING_APPROVAL)
+  and why, together with the trust facts that decided it (provider, directory, whether the
+  email is verified and vouched for). `Sign-in rejected` and `has no selectable tenant`
+  explain the pages people get stuck on. No tokens are logged.
+
 ### Demo users (DEV and SIT only)
 The Forty2 demo users are the real Forty2 Microsoft accounts from `Data/UsersDEV.csv`
 (an Entra export), so Forty2 staff sign in with Microsoft and land in their own

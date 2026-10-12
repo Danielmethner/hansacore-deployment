@@ -70,6 +70,11 @@ spec:
               value: "true"
             - name: KC_METRICS_ENABLED
               value: "false"
+            # Sign-in audit trail: the jboss-logging event listener writes failures as
+            # warnings but successes only at debug unless told otherwise. Info makes every
+            # login, logout and registration appear in `kubectl logs deploy/keycloak`.
+            - name: KC_SPI_EVENTS_LISTENER__JBOSS_LOGGING__SUCCESS_LEVEL
+              value: "info"
           ports:
             - containerPort: 8080
               name: http
